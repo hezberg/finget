@@ -1,0 +1,50 @@
+# finget 策略配置文件
+#
+# 控制 `finget fetch latest` 和 `finget scan` 命令的行为。
+# 文件查找路径（按优先级）：
+#   1. 环境变量 FINGET_CONFIG_FILE 指定的路径
+#   2. 项目根目录下的 config.yaml
+#   3. 当前工作目录下的 config.yaml
+#
+# 文件不存在时使用内置默认值（见下方注释）。
+# 复制此文件为 config.yaml 并按需修改。
+
+# ============================================================================
+# latest_datasets — `finget fetch latest` 每日增量更新时处理的数据集
+# ============================================================================
+# 默认值:
+#   - daily          日线行情（DAILY 模式，按日全市场拉取，~10秒）
+#   - adj_factor     复权因子（DAILY 模式）
+#   - daily_basic    每日指标（DAILY 模式）
+#   - stk_factor_pro 技术面因子（DAILY 模式）
+#
+# 也可以加入非 daily_supported 的时序数据集（会自动用 INCREMENTAL 逐标的模式）:
+#   - weekly         周线行情（INCREMENTAL 模式，逐标的）
+#   - report_rc      卖方研报（INCREMENTAL 模式，按季度）
+#   - broker_recommend 券商金股（INCREMENTAL 模式，按月）
+#
+# 注意: stock_basic 和 trade_cal 不适合每日增量更新。
+
+latest_datasets:
+  - daily
+  - adj_factor
+  - daily_basic
+  - stk_factor_pro
+
+# ============================================================================
+# scan_datasets — `finget scan` 查漏补缺时扫描的数据集
+# ============================================================================
+# 默认值:
+#   - daily          日线行情
+#   - weekly         周线行情
+#   - adj_factor     复权因子
+#   - daily_basic    每日指标
+#
+# scan 仅对时序数据集有效（TIME_SERIES_DATASETS）。
+# 非时序数据集（stock_basic, trade_cal, report_rc, broker_recommend）会被跳过。
+
+scan_datasets:
+  - daily
+  - weekly
+  - adj_factor
+  - daily_basic

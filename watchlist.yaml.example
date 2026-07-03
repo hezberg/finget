@@ -1,0 +1,15 @@
+# watchlist — 自选股清单
+#
+# 格式: ts_code: tags（列表）
+# 由 scripts/sync_watchlist.py 从同花顺自选股同步生成，也可手动编辑。
+# 重新跑 sync 脚本会覆盖此文件，手动修改请备份。
+#
+# ts_code 兼容 tushare 格式: 6位代码.SH / .SZ / .BJ
+# tags 是该股票所属的同花顺分组名，一只股票可有多个 tag。
+
+002831.SZ:
+  tags: [today, 航天军工]
+600378.SH:
+  tags: [PTFE, 自选]
+688028.SH:
+  tags: [pcb钻针]
