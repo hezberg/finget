@@ -113,7 +113,6 @@ class StrategyConfig(BaseModel):
     """
 
     latest_datasets: list[str] = Field(default_factory=lambda: [
-        "stock_basic", "trade_cal",
         "daily", "adj_factor", "daily_basic", "stk_factor_pro",
     ])
     scan_datasets: list[str] = Field(default_factory=lambda: [

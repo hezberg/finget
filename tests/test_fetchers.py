@@ -278,7 +278,7 @@ class TestProBar:
         mock_ts.pro_api.return_value = mock_api
 
         cfg = TushareConfig(token="test", rate_limit_per_min=0)
-        with patch.object(TushareFetcher, "_select_best_url", return_value="https://mirror.cn"):
+        with patch.object(TushareFetcher, "_select_best_url", return_value=("https://mirror.cn", 0.0)):
             fetcher = TushareFetcher(cfg)
 
         # 模拟 ts.pro_bar 返回数据
@@ -311,7 +311,7 @@ class TestProBar:
         mock_ts.pro_api.return_value = mock_api
 
         cfg = TushareConfig(token="test", rate_limit_per_min=0)
-        with patch.object(TushareFetcher, "_select_best_url", return_value="https://mirror.cn"):
+        with patch.object(TushareFetcher, "_select_best_url", return_value=("https://mirror.cn", 0.0)):
             fetcher = TushareFetcher(cfg)
 
         mock_ts.pro_bar.return_value = None

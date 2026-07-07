@@ -98,6 +98,7 @@ def _make_stub(recorder: _RecordingFetcher):
             self.fetch_all = recorder.fetch_all
             self.page_size = 5000
             self.selected_url = "https://test.cn"
+            self.selected_response_time = 0.0
     return _StubTushareFetcher
 
 
@@ -236,7 +237,7 @@ class TestFetchCommand:
             main, ["fetch", "weekly", "-s", "000001.SZ"]
         )
         assert result.exit_code == 0, result.output
-        assert "自动增量" in result.output
+        assert "按标的/区间拉取" in result.output
 
     def test_fetch_stock_basic_no_date(self, tmp_path, monkeypatch):
         """stock_basic 不需要日期参数，应正常运行."""
@@ -265,7 +266,7 @@ class TestFetchCommand:
 
         result = self.runner.invoke(main, ["fetch", "daily"])
         assert result.exit_code == 0, result.output
-        assert "DAILY" in result.output or "daily" in result.output
+        assert "按日全市场拉取" in result.output
 
     def test_fetch_stk_surv_by_ts_code(self, tmp_path, monkeypatch):
         """stk_surv 应逐标的拉取（指定 --codes 时走逐标的）."""
