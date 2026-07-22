@@ -58,6 +58,8 @@
 <script>
 let currentCode = '';
 let klineChart, volumeChart, maSeries;
+let klineSeriesList = [];    // v5 没有 chart.series()，手动追踪
+let volSeriesList = [];
 
 // ---- TradingView 图表初始化 ----
 function initTradingViewCharts() {
@@ -65,8 +67,8 @@ function initTradingViewCharts() {
     const volContainer = document.getElementById('volume-chart');
 
     // 清除旧图表
-    if (container._chart) { container._chart.remove(); }
-    if (volContainer._chart) { volContainer._chart.remove(); }
+    if (container._chart) { container._chart.remove(); klineSeriesList = []; }
+    if (volContainer._chart) { volContainer._chart.remove(); volSeriesList = []; }
 
     // 主图 - K线
     klineChart = LightweightCharts.createChart(container, {
@@ -100,11 +102,10 @@ function renderKline(data) {
     if (!klineChart) initTradingViewCharts();
 
     // 清除旧 series
-    klineChart.removeSeries(klineChart.series()?.[0] || null);
-    volumeChart.removeSeries(volumeChart.series()?.[0] || null);
-    Object.values(maSeries || {}).forEach(s => {
-        try { klineChart.removeSeries(s); } catch(e) {}
-    });
+    klineSeriesList.forEach(s => { try { klineChart.removeSeries(s); } catch(e) {} });
+    klineSeriesList = [];
+    volSeriesList.forEach(s => { try { volumeChart.removeSeries(s); } catch(e) {} });
+    volSeriesList = [];
     maSeries = {};
 
     const candleData = data.map(d => ({
@@ -125,6 +126,7 @@ function renderKline(data) {
         wickUpColor: '#ef4444', wickDownColor: '#22c55e',
     });
     candleSeries.setData(candleData);
+    klineSeriesList.push(candleSeries);
 
     // 均线 MA5/10/20/60
     const maColors = { 5: '#fbbf24', 10: '#f59e0b', 20: '#ec4899', 60: '#3b82f6' };
@@ -137,12 +139,14 @@ function renderKline(data) {
             });
             line.setData(maData);
             maSeries[period] = line;
+            klineSeriesList.push(line);
         }
     });
 
     // 成交量
     const volSeries = volumeChart.addHistogramSeries({ priceFormat: { type: 'volume' } });
     volSeries.setData(volumeData);
+    volSeriesList.push(volSeries);
 
     // 同步时间轴
     klineChart.timeScale().subscribeVisibleTimeRangeChange(range => {
