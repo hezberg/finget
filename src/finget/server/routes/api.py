@@ -243,23 +243,34 @@ async def kline(
 
     where = f" WHERE {' AND '.join(conditions)}"
 
-    # 复权处理：LEFT JOIN adj_factor，前复权=乘因子，后复权=除因子
+    # 复权处理：LEFT JOIN adj_factor，前复权/后复权均归一化到最新日
     if adj == "qfq":
         price_expr = (
-            "d.open * COALESCE(a.adj_factor, 1) AS open, "
-            "d.high * COALESCE(a.adj_factor, 1) AS high, "
-            "d.low * COALESCE(a.adj_factor, 1) AS low, "
-            "d.close * COALESCE(a.adj_factor, 1) AS close"
+            "d.open * COALESCE(a.adj_factor, 1) / latest.f AS open, "
+            "d.high * COALESCE(a.adj_factor, 1) / latest.f AS high, "
+            "d.low * COALESCE(a.adj_factor, 1) / latest.f AS low, "
+            "d.close * COALESCE(a.adj_factor, 1) / latest.f AS close"
         )
-        join = " LEFT JOIN adj_factor a ON d.ts_code = a.ts_code AND d.trade_date = a.trade_date"
+        join = (
+            " LEFT JOIN adj_factor a ON d.ts_code = a.ts_code AND d.trade_date = a.trade_date"
+            " CROSS JOIN (SELECT COALESCE(MAX(adj_factor), 1) AS f FROM adj_factor"
+            "   WHERE ts_code = ?) latest"
+        )
+        # 把 ts_code 加到 params 最前面（CROSS JOIN 子查询用）
+        params.insert(0, ts_code)
     elif adj == "hfq":
         price_expr = (
-            "d.open / COALESCE(NULLIF(a.adj_factor, 0), 1) AS open, "
-            "d.high / COALESCE(NULLIF(a.adj_factor, 0), 1) AS high, "
-            "d.low / COALESCE(NULLIF(a.adj_factor, 0), 1) AS low, "
-            "d.close / COALESCE(NULLIF(a.adj_factor, 0), 1) AS close"
+            "d.open / COALESCE(NULLIF(a.adj_factor, 0), 1) * latest.f AS open, "
+            "d.high / COALESCE(NULLIF(a.adj_factor, 0), 1) * latest.f AS high, "
+            "d.low / COALESCE(NULLIF(a.adj_factor, 0), 1) * latest.f AS low, "
+            "d.close / COALESCE(NULLIF(a.adj_factor, 0), 1) * latest.f AS close"
         )
-        join = " LEFT JOIN adj_factor a ON d.ts_code = a.ts_code AND d.trade_date = a.trade_date"
+        join = (
+            " LEFT JOIN adj_factor a ON d.ts_code = a.ts_code AND d.trade_date = a.trade_date"
+            " CROSS JOIN (SELECT COALESCE(MAX(adj_factor), 1) AS f FROM adj_factor"
+            "   WHERE ts_code = ?) latest"
+        )
+        params.insert(0, ts_code)
     else:
         price_expr = "d.open, d.high, d.low, d.close"
         join = ""
