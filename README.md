@@ -74,6 +74,7 @@ uv run finget scan
 | `finget scan` | 按 `config.yaml` 配置查漏补缺 |
 | `finget stats` | 数据统计（行数 / 时间范围 / 覆盖率） |
 | `finget show <table> -n 10` | 预览表内容（支持 `-o` 导出 CSV） |
+| `finget serve` | 启动 Web 数据展示前端（仪表盘/K线/研报/调研/金股） |
 
 ### 5. 常用场景示例
 
@@ -107,6 +108,29 @@ uv run finget fetch broker_recommend -S 20160101 -E 20260630
 uv run finget fetch adj_factor -S 20241201 -E 20241205
 ```
 
+### 5.5. Web 数据展示前端
+
+```bash
+# 启动 Web 仪表盘（默认 http://127.0.0.1:8000）
+uv run finget serve
+
+# 指定端口
+uv run finget serve -p 9000
+
+# 局域网可访问
+uv run finget serve --host 0.0.0.0
+
+# 开发模式热重载
+uv run finget serve --reload
+```
+
+浏览器打开后提供5个页面：
+- **仪表盘** `/` — 数据总览、行业分布、各表行数
+- **K线分析** `/kline` — TradingView 蜡烛图 + 均线 + 成交量 + PE/PB
+- **研报中心** `/research` — EPS预测趋势 + 卖方研报列表
+- **机构调研** `/survey` — 时间线展示 + 可展开调研内容
+- **券商金股** `/broker` — 热力图（券商×月份） + 详情表
+
 ### 6. 拉取行为速查
 
 finget 不再暴露"模式"概念，拉取行为由数据集类型自动决定：
@@ -137,7 +161,7 @@ finget/
 │   ├── __init__.py
 │   ├── logging.py          # loguru 日志配置
 │   ├── config.py           # Pydantic 配置（极简版，从 .env 加载）
-│   ├── cli.py              # Click CLI（顶级 init/fetch/scan/stats/show + db 子组）
+│   ├── cli.py              # Click CLI（init/fetch/scan/stats/show/serve + db 子组）
 │   ├── fetchers/           # 数据获取层
 │   │   ├── base.py         # 抽象基类（限速 + 分页）
 │   │   ├── tushare_fetcher.py
@@ -150,7 +174,20 @@ finget/
 │   │   └── data_reader.py
 │   ├── stats/              # 状态统计
 │   │   └── collector.py
-└── tests/                  # 单元测试（166 用例，8 个文件）
+│   └── server/             # Web 数据展示前端
+│       ├── app.py           # FastAPI 应用入口
+│       ├── store_reader.py  # 线程安全只读 DuckDB 访问
+│       ├── routes/
+│       │   ├── api.py       # REST API 路由
+│       │   └── pages.py     # HTML 页面路由
+│       └── templates/       # Jinja2 模板
+│           ├── base.html
+│           ├── dashboard.html
+│           ├── kline.html
+│           ├── research.html
+│           ├── survey.html
+│           └── broker.html
+└── tests/                  # 单元测试（192 用例，9 个文件）
     ├── conftest.py
     ├── test_config.py
     ├── test_storage.py
@@ -158,7 +195,8 @@ finget/
     ├── test_updater.py
     ├── test_reader.py
     ├── test_stats.py
-    └── test_cli.py
+    ├── test_cli.py
+    └── test_server.py
 ```
 
 ## 数据库 Schema

@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% block title %}券商金股 — finget{% endblock %}
+{% block head_extra %}
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>
+<style>
+    .heatmap-cell { font-size: 10px; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="p-4 max-w-7xl mx-auto">
+    <h1 class="text-xl font-bold mb-4">券商月度金股</h1>
+
+    <!-- 热力图 -->
+    <div class="card p-4 mb-4">
+        <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold text-slate-300">推荐热力图（券商 × 月份）</h2>
+            <div class="flex gap-2">
+                <input type="text" id="start-month" placeholder="起始月 YYYYMM"
+                       class="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-100 w-28">
+                <input type="text" id="end-month" placeholder="结束月 YYYYMM"
+                       class="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-100 w-28">
+                <button id="btn-heatmap" class="bg-cyan-600 hover:bg-cyan-500 text-white text-xs px-3 py-1 rounded">
+                    刷新
+                </button>
+            </div>
+        </div>
+        <div id="chart-heatmap" style="height:500px;">
+            <div class="flex items-center justify-center h-full text-slate-500 text-sm">加载中...</div>
+        </div>
+    </div>
+
+    <!-- 详情表 -->
+    <div class="card p-4">
+        <div class="flex items-center gap-3 mb-3">
+            <h2 class="text-sm font-semibold text-slate-300">金股详情</h2>
+            <select id="filter-month" class="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-100">
+                <option value="">全部月份</option>
+            </select>
+            <input type="text" id="filter-broker" placeholder="筛选券商..."
+                   class="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-100 w-36">
+            <button id="btn-filter" class="bg-slate-600 hover:bg-slate-500 text-white text-xs px-3 py-1 rounded">
+                筛选
+            </button>
+            <span id="detail-count" class="text-xs text-slate-500 ml-auto"></span>
+        </div>
+        <div class="overflow-x-auto scrollbar-thin max-h-96">
+            <table class="w-full text-sm text-left" id="detail-table">
+                <thead class="text-xs text-slate-400 uppercase bg-slate-800 sticky top-0">
+                    <tr>
+                        <th class="px-3 py-2">月份</th>
+                        <th class="px-3 py-2">券商</th>
+                        <th class="px-3 py-2">股票代码</th>
+                        <th class="px-3 py-2">股票名称</th>
+                    </tr>
+                </thead>
+                <tbody class="text-slate-300"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let allHeatmapData = [];
+let allMonths = [];
+
+async function init() {
+    try {
+        const [hmResp, monthsResp] = await Promise.all([
+            fetch('/api/broker_recommend/heatmap'),
+            fetch('/api/broker_recommend/months'),
+        ]);
+        allHeatmapData = await hmResp.json();
+        allMonths = await monthsResp.json();
+
+        // 填充月份筛选器
+        const sel = document.getElementById('filter-month');
+        sel.innerHTML = '<option value="">全部月份</option>' +
+            allMonths.map(m => `<option value="${m}">${m}</option>`).join('');
+
+        renderHeatmap(allHeatmapData);
+        loadDetails();
+    } catch (e) {
+        document.getElementById('chart-heatmap').innerHTML =
+            '<div class="flex items-center justify-center h-full text-red-400 text-sm">加载失败: ' + e.message + '</div>';
+    }
+}
+
+function renderHeatmap(data) {
+    const dom = document.getElementById('chart-heatmap');
+    if (dom._echart) dom._echart.dispose();
+    const chart = echarts.init(dom);
+    dom._echart = chart;
+
+    if (!data || data.length === 0) {
+        chart.setOption({
+            title: { text: '暂无金股数据', left: 'center', top: 'center', textStyle: { color: '#64748b', fontSize: 14 } }
+        });
+        return;
+    }
+
+    const brokers = [...new Set(data.map(d => d.broker))];
+    const months = [...new Set(data.map(d => d.month))].sort();
+    const maxCnt = Math.max(...data.map(d => d.cnt));
+
+    // 构建矩阵
+    const seriesData = data.map(d => [months.indexOf(d.month), brokers.indexOf(d.broker), d.cnt]);
+
+    chart.setOption({
+        tooltip: {
+            formatter: p => `${brokers[p.data[1]]}<br/>${months[p.data[0]]}<br/>推荐次数: <b>${p.data[2]}</b>`
+        },
+        grid: { left: 120, right: 60, top: 10, bottom: 60 },
+        xAxis: {
+            type: 'category', data: months,
+            axisLabel: { color: '#64748b', fontSize: 9, rotate: 45,
+                formatter: v => v.substring(2, 6) },
+        },
+        yAxis: {
+            type: 'category', data: brokers,
+            axisLabel: { color: '#94a3b8', fontSize: 10 },
+        },
+        visualMap: {
+            min: 0, max: maxCnt,
+            calculable: true,
+            orient: 'vertical', right: 10, top: 'center',
+            inRange: { color: ['#1e293b', '#164e63', '#155e75', '#0e7490', '#06b6d4', '#22d3ee'] },
+            textStyle: { color: '#94a3b8' },
+        },
+        series: [{
+            type: 'heatmap',
+            data: seriesData,
+            label: { show: true, color: '#e2e8f0', fontSize: 9 },
+            emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.5)' } },
+        }]
+    });
+}
+
+async function loadDetails(month, broker) {
+    let url = '/api/broker_recommend?limit=1000';
+    if (month) url += `&month=${month}`;
+    if (broker) url += `&broker=${encodeURIComponent(broker)}`;
+
+    const resp = await fetch(url);
+    const data = await resp.json();
+    document.getElementById('detail-count').textContent = `共 ${data.length} 条`;
+
+    const tbody = document.querySelector('#detail-table tbody');
+    if (data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="px-3 py-6 text-center text-slate-500">暂无数据</td></tr>';
+    } else {
+        tbody.innerHTML = data.map(r => `
+            <tr class="border-b border-slate-700 hover:bg-slate-700/50">
+                <td class="px-3 py-2 text-xs font-mono text-cyan-400">${r.month}</td>
+                <td class="px-3 py-2 text-xs">${r.broker}</td>
+                <td class="px-3 py-2 text-xs font-mono">${r.ts_code}</td>
+                <td class="px-3 py-2 text-xs">${r.name || '-'}</td>
+            </tr>
+        `).join('');
+    }
+}
+
+document.getElementById('btn-filter').addEventListener('click', () => {
+    const month = document.getElementById('filter-month').value;
+    const broker = document.getElementById('filter-broker').value.trim();
+    loadDetails(month || null, broker || null);
+});
+
+document.getElementById('btn-heatmap').addEventListener('click', async () => {
+    const sm = document.getElementById('start-month').value.trim();
+    const em = document.getElementById('end-month').value.trim();
+    let url = '/api/broker_recommend/heatmap';
+    const params = [];
+    if (sm) params.push(`start_month=${sm}`);
+    if (em) params.push(`end_month=${em}`);
+    if (params.length) url += '?' + params.join('&');
+    const resp = await fetch(url);
+    const data = await resp.json();
+    renderHeatmap(data);
+});
+
+window.addEventListener('resize', () => {
+    const dom = document.getElementById('chart-heatmap');
+    if (dom._echart) dom._echart.resize();
+});
+
+init();
+</script>
+{% endblock %}

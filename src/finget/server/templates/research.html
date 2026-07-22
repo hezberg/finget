@@ -1,0 +1,214 @@
+{% extends "base.html" %}
+{% block title %}研报中心 — finget{% endblock %}
+{% block head_extra %}
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>
+<style>
+    .rating-buy { color: #ef4444; font-weight: 600; }
+    .rating-hold { color: #f59e0b; }
+    .rating-sell { color: #22c55e; }
+    .truncate-cell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="p-4 max-w-7xl mx-auto">
+    <div class="flex flex-wrap items-center gap-3 mb-4">
+        <div class="relative">
+            <input type="text" id="stock-search" placeholder="搜索股票..."
+                   class="bg-slate-800 border border-slate-600 rounded px-3 py-2 text-sm text-slate-100
+                          placeholder-slate-500 focus:outline-none focus:border-cyan-400 w-52"
+                   autocomplete="off">
+            <div id="search-results" class="search-dropdown absolute z-50 w-full bg-slate-800 border border-slate-600
+                         rounded-b shadow-lg hidden"></div>
+        </div>
+        <button id="btn-load" class="bg-cyan-600 hover:bg-cyan-500 text-white text-sm px-4 py-2 rounded font-medium">
+            查询
+        </button>
+        <span id="stock-title" class="text-lg font-bold text-slate-200">— 请选择股票</span>
+        <span class="text-xs text-slate-500 ml-auto">提示：输入股票代码后点击查询</span>
+    </div>
+
+    <!-- EPS 趋势图 -->
+    <div class="card p-4 mb-4">
+        <h2 class="text-sm font-semibold text-slate-300 mb-2">EPS 预测趋势</h2>
+        <div id="chart-eps" style="height:300px;">
+            <div class="flex items-center justify-center h-full text-slate-500 text-sm">请先选择股票</div>
+        </div>
+    </div>
+
+    <!-- 研报列表 -->
+    <div class="card p-4">
+        <h2 class="text-sm font-semibold text-slate-300 mb-3">
+            卖方研报列表
+            <span id="report-count" class="text-xs text-slate-500 font-normal ml-2"></span>
+        </h2>
+        <div class="overflow-x-auto scrollbar-thin">
+            <table class="w-full text-sm text-left" id="report-table">
+                <thead class="text-xs text-slate-400 uppercase bg-slate-800 sticky top-0">
+                    <tr>
+                        <th class="px-3 py-2">日期</th>
+                        <th class="px-3 py-2">机构</th>
+                        <th class="px-3 py-2">作者</th>
+                        <th class="px-3 py-2">评级</th>
+                        <th class="px-3 py-2 text-right">EPS</th>
+                        <th class="px-3 py-2 text-right">PE</th>
+                        <th class="px-3 py-2 text-right">目标价</th>
+                        <th class="px-3 py-2">标题</th>
+                    </tr>
+                </thead>
+                <tbody class="text-slate-300"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentCode = '';
+
+function ratingClass(r) {
+    if (!r) return '';
+    const v = r.toLowerCase();
+    if (v.includes('买入') || v.includes('买') || v.includes('buy')) return 'rating-buy';
+    if (v.includes('卖出') || v.includes('卖') || v.includes('sell')) return 'rating-sell';
+    return 'rating-hold';
+}
+
+async function loadResearch(tsCode) {
+    currentCode = tsCode;
+    document.getElementById('stock-title').textContent = tsCode;
+
+    try {
+        const [infoResp, reportResp, epsResp] = await Promise.all([
+            fetch(`/api/stocks/${tsCode}`),
+            fetch(`/api/research/${tsCode}?limit=200`),
+            fetch(`/api/research/${tsCode}/eps_trend`),
+        ]);
+
+        const info = await infoResp.json();
+        const reports = await reportResp.json();
+        const epsData = await epsResp.json();
+
+        const b = info.basic || {};
+        document.getElementById('stock-title').textContent = `${tsCode} ${b.name || ''}`;
+        document.getElementById('report-count').textContent = `共 ${reports.length} 篇`;
+
+        // EPS 趋势
+        renderEPSTrend(epsData);
+
+        // 研报表格
+        const tbody = document.querySelector('#report-table tbody');
+        if (reports.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-6 text-center text-slate-500">暂无研报</td></tr>`;
+        } else {
+            tbody.innerHTML = reports.map(r => `
+                <tr class="border-b border-slate-700 hover:bg-slate-700/50">
+                    <td class="px-3 py-2 text-xs text-slate-400 whitespace-nowrap">${(r.report_date || '').substring(0,10)}</td>
+                    <td class="px-3 py-2 text-xs">${r.org_name || '-'}</td>
+                    <td class="px-3 py-2 text-xs text-slate-400 truncate-cell">${r.author_name || '-'}</td>
+                    <td class="px-3 py-2 text-xs ${ratingClass(r.rating)}">${r.rating || '-'}</td>
+                    <td class="px-3 py-2 text-xs text-right font-mono">${r.eps != null ? r.eps.toFixed(2) : '-'}</td>
+                    <td class="px-3 py-2 text-xs text-right font-mono">${r.pe != null ? r.pe.toFixed(1) : '-'}</td>
+                    <td class="px-3 py-2 text-xs text-right font-mono">${r.max_price != null ? r.max_price.toFixed(2) : '-'}</td>
+                    <td class="px-3 py-2 text-xs truncate-cell text-slate-400" title="${r.report_title || ''}">${r.report_title || '-'}</td>
+                </tr>
+            `).join('');
+        }
+    } catch (e) {
+        document.getElementById('stock-title').textContent = '加载失败: ' + e.message;
+    }
+}
+
+function renderEPSTrend(data) {
+    const dom = document.getElementById('chart-eps');
+    if (dom._echart) dom._echart.dispose();
+    const chart = echarts.init(dom);
+    dom._echart = chart;
+
+    if (!data || data.length === 0) {
+        chart.setOption({
+            title: { text: '暂无数据', left: 'center', top: 'center', textStyle: { color: '#64748b', fontSize: 14 } }
+        });
+        return;
+    }
+
+    // 按机构+季度分组
+    const orgs = [...new Set(data.map(d => d.org_name))];
+    // 取最近的数据点做散点图
+    const scatterData = data.map(d => ({
+        value: [d.report_date ? d.report_date.substring(0, 10) : '', d.eps],
+        name: d.org_name,
+        rating: d.rating,
+        quarter: d.quarter,
+    }));
+
+    chart.setOption({
+        tooltip: {
+            trigger: 'item',
+            formatter: p => `${p.name}<br/>日期: ${p.value[0]}<br/>EPS: ${p.value[1]}<br/>评级: ${p.data.rating}<br/>报告期: ${p.data.quarter}`,
+        },
+        grid: { left: 60, right: 30, top: 20, bottom: 40 },
+        xAxis: { type: 'category', axisLabel: { color: '#64748b', fontSize: 10, rotate: 45 } },
+        yAxis: { type: 'value', name: 'EPS (元)', nameTextStyle: { color: '#94a3b8' }, axisLabel: { color: '#94a3b8' } },
+        series: [{
+            type: 'scatter',
+            data: scatterData,
+            symbolSize: 8,
+            itemStyle: { color: '#22d3ee' },
+        }]
+    });
+}
+
+// ---- 搜索（复用 K线页逻辑） ----
+let searchTimer;
+document.getElementById('stock-search').addEventListener('input', function() {
+    clearTimeout(searchTimer);
+    const q = this.value.trim();
+    if (!q) { document.getElementById('search-results').classList.add('hidden'); return; }
+    searchTimer = setTimeout(async () => {
+        const resp = await fetch(`/api/stocks/search?q=${encodeURIComponent(q)}`);
+        const results = await resp.json();
+        const dd = document.getElementById('search-results');
+        dd.innerHTML = results.length === 0
+            ? '<div class="px-3 py-2 text-xs text-slate-500">无结果</div>'
+            : results.slice(0, 15).map(r =>
+                `<div class="px-3 py-2 text-sm hover:bg-slate-600 cursor-pointer border-b border-slate-700"
+                      onclick="selectStock('${r.ts_code}','${r.name||''}')">
+                    <span class="text-cyan-400 font-mono">${r.ts_code}</span>
+                    <span class="text-slate-300 ml-2">${r.name||''}</span>
+                </div>`).join('');
+        dd.classList.remove('hidden');
+    }, 250);
+});
+
+document.addEventListener('click', e => {
+    if (!e.target.closest('#stock-search') && !e.target.closest('#search-results'))
+        document.getElementById('search-results').classList.add('hidden');
+});
+
+function selectStock(code, name) {
+    document.getElementById('stock-search').value = `${code} ${name}`;
+    document.getElementById('search-results').classList.add('hidden');
+    loadResearch(code);
+}
+
+document.getElementById('btn-load').addEventListener('click', () => {
+    const val = document.getElementById('stock-search').value.trim();
+    const code = val.split(/\s+/)[0];
+    if (code) loadResearch(code);
+});
+
+document.getElementById('stock-search').addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+        document.getElementById('search-results').classList.add('hidden');
+        const code = e.target.value.trim().split(/\s+/)[0];
+        if (code) loadResearch(code);
+    }
+});
+
+window.addEventListener('resize', () => {
+    const dom = document.getElementById('chart-eps');
+    if (dom._echart) dom._echart.resize();
+});
+</script>
+{% endblock %}

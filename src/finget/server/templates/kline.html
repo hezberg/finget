@@ -1,0 +1,317 @@
+{% extends "base.html" %}
+{% block title %}K线分析 — finget{% endblock %}
+{% block head_extra %}
+<script src="https://unpkg.com/lightweight-charts@5.0.1/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+    #kline-chart { width: 100%; height: 500px; }
+    #volume-chart { width: 100%; height: 150px; }
+    .metric-value { font-variant-numeric: tabular-nums; }
+    .search-dropdown { max-height: 300px; overflow-y: auto; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="p-4 max-w-7xl mx-auto">
+    <!-- 顶部：股票搜索 + 信息 -->
+    <div class="flex flex-wrap items-center gap-3 mb-4">
+        <div class="relative">
+            <input type="text" id="stock-search" placeholder="搜索股票代码或名称..."
+                   class="bg-slate-800 border border-slate-600 rounded px-3 py-2 text-sm text-slate-100
+                          placeholder-slate-500 focus:outline-none focus:border-cyan-400 w-64"
+                   autocomplete="off">
+            <div id="search-results" class="search-dropdown absolute z-50 w-full bg-slate-800 border border-slate-600
+                         rounded-b shadow-lg hidden"></div>
+        </div>
+        <button id="btn-load" class="bg-cyan-600 hover:bg-cyan-500 text-white text-sm px-4 py-2 rounded font-medium">
+            加载
+        </button>
+        <select id="timeframe" class="bg-slate-800 border border-slate-600 rounded px-3 py-2 text-sm text-slate-100">
+            <option value="daily">日线</option>
+            <option value="weekly">周线</option>
+        </select>
+        <span id="stock-title" class="text-lg font-bold text-slate-200 ml-2">—</span>
+        <span id="stock-info" class="text-xs text-slate-400"></span>
+    </div>
+
+    <!-- 指标卡片行 -->
+    <div id="metrics-row" class="grid grid-cols-3 md:grid-cols-6 gap-3 mb-4"></div>
+
+    <!-- K线图 -->
+    <div class="card p-0 overflow-hidden mb-4">
+        <div id="kline-chart"></div>
+    </div>
+
+    <!-- 成交量 -->
+    <div class="card p-0 overflow-hidden mb-4">
+        <div id="volume-chart"></div>
+    </div>
+
+    <!-- PE/PB 走势 -->
+    <div class="card p-4">
+        <h2 class="text-sm font-semibold text-slate-300 mb-2">PE / PB 走势</h2>
+        <div id="chart-pepb" style="height:250px;"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>
+<script>
+let currentCode = '';
+let klineChart, volumeChart, maSeries;
+
+// ---- TradingView 图表初始化 ----
+function initTradingViewCharts() {
+    const container = document.getElementById('kline-chart');
+    const volContainer = document.getElementById('volume-chart');
+
+    // 清除旧图表
+    if (container._chart) { container._chart.remove(); }
+    if (volContainer._chart) { volContainer._chart.remove(); }
+
+    // 主图 - K线
+    klineChart = LightweightCharts.createChart(container, {
+        layout: {
+            background: { color: '#1e293b' },
+            textColor: '#94a3b8',
+        },
+        grid: { vertLines: { color: '#334155' }, horzLines: { color: '#334155' } },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        rightPriceScale: { borderColor: '#475569' },
+        timeScale: { borderColor: '#475569', timeVisible: true },
+        height: 500,
+    });
+    container._chart = klineChart;
+
+    // 成交量图
+    volumeChart = LightweightCharts.createChart(volContainer, {
+        layout: {
+            background: { color: '#1e293b' },
+            textColor: '#94a3b8',
+        },
+        grid: { vertLines: { color: '#334155' }, horzLines: { color: '#334155' } },
+        rightPriceScale: { borderColor: '#475569' },
+        timeScale: { borderColor: '#475569', timeVisible: true },
+        height: 150,
+    });
+    volContainer._chart = volumeChart;
+}
+
+function renderKline(data) {
+    if (!klineChart) initTradingViewCharts();
+
+    // 清除旧 series
+    klineChart.removeSeries(klineChart.series()?.[0] || null);
+    volumeChart.removeSeries(volumeChart.series()?.[0] || null);
+    Object.values(maSeries || {}).forEach(s => {
+        try { klineChart.removeSeries(s); } catch(e) {}
+    });
+    maSeries = {};
+
+    const candleData = data.map(d => ({
+        time: d.time,
+        open: d.open, high: d.high, low: d.low, close: d.close,
+    }));
+
+    const volumeData = data.map(d => ({
+        time: d.time,
+        value: d.volume || 0,
+        color: (d.close >= d.open) ? 'rgba(239, 68, 68, 0.5)' : 'rgba(34, 197, 94, 0.5)',
+    }));
+
+    // K线
+    const candleSeries = klineChart.addCandlestickSeries({
+        upColor: '#ef4444', downColor: '#22c55e',
+        borderUpColor: '#ef4444', borderDownColor: '#22c55e',
+        wickUpColor: '#ef4444', wickDownColor: '#22c55e',
+    });
+    candleSeries.setData(candleData);
+
+    // 均线 MA5/10/20/60
+    const maColors = { 5: '#fbbf24', 10: '#f59e0b', 20: '#ec4899', 60: '#3b82f6' };
+    [5, 10, 20, 60].forEach(period => {
+        const maData = calcMA(candleData, period);
+        if (maData.length > 0) {
+            const line = klineChart.addLineSeries({
+                color: maColors[period], lineWidth: 1,
+                lastValueVisible: false, priceLineVisible: false,
+            });
+            line.setData(maData);
+            maSeries[period] = line;
+        }
+    });
+
+    // 成交量
+    const volSeries = volumeChart.addHistogramSeries({ priceFormat: { type: 'volume' } });
+    volSeries.setData(volumeData);
+
+    // 同步时间轴
+    klineChart.timeScale().subscribeVisibleTimeRangeChange(range => {
+        volumeChart.timeScale().setVisibleRange(range);
+    });
+    volumeChart.timeScale().subscribeVisibleTimeRangeChange(range => {
+        klineChart.timeScale().setVisibleRange(range);
+    });
+    klineChart.timeScale().fitContent();
+}
+
+function calcMA(data, period) {
+    const result = [];
+    for (let i = period - 1; i < data.length; i++) {
+        let sum = 0;
+        for (let j = i - period + 1; j <= i; j++) sum += data[j].close;
+        result.push({ time: data[i].time, value: sum / period });
+    }
+    return result;
+}
+
+// ---- PE / PB 图表 ----
+function renderPEPB(dailyBasicData) {
+    const dom = document.getElementById('chart-pepb');
+    if (dom._echart) dom._echart.dispose();
+    const chart = echarts.init(dom);
+    dom._echart = chart;
+
+    const dates = dailyBasicData.map(d => d.trade_date?.substring(0, 10));
+    const pe = dailyBasicData.map(d => d.pe);
+    const pb = dailyBasicData.map(d => d.pb);
+
+    chart.setOption({
+        tooltip: { trigger: 'axis' },
+        legend: { data: ['PE', 'PB'], textStyle: { color: '#94a3b8' }, top: 0 },
+        grid: { left: 60, right: 60, top: 30, bottom: 30 },
+        xAxis: { type: 'category', data: dates, axisLabel: { color: '#64748b', fontSize: 10 } },
+        yAxis: [
+            { type: 'value', name: 'PE', nameTextStyle: { color: '#f59e0b' }, axisLabel: { color: '#94a3b8' } },
+            { type: 'value', name: 'PB', nameTextStyle: { color: '#3b82f6' }, axisLabel: { color: '#94a3b8' } },
+        ],
+        series: [
+            { name: 'PE', type: 'line', data: pe, yAxisIndex: 0, lineStyle: { color: '#f59e0b' },
+              symbol: 'none', smooth: true },
+            { name: 'PB', type: 'line', data: pb, yAxisIndex: 1, lineStyle: { color: '#3b82f6' },
+              symbol: 'none', smooth: true },
+        ]
+    });
+}
+
+// ---- 加载数据 ----
+async function loadStock(tsCode) {
+    currentCode = tsCode;
+    document.getElementById('stock-title').textContent = tsCode;
+    document.getElementById('stock-info').textContent = '加载中...';
+
+    const table = document.getElementById('timeframe').value;
+
+    try {
+        // 并行加载 K线、指标、股票信息
+        const [klineResp, infoResp, basicResp] = await Promise.all([
+            fetch(`/api/kline/${tsCode}?table=${table}&limit=500`),
+            fetch(`/api/stocks/${tsCode}`),
+            fetch(`/api/daily_basic/${tsCode}?limit=500`),
+        ]);
+
+        const klineData = await klineResp.json();
+        const info = await infoResp.json();
+        const basicData = await basicResp.json();
+
+        // 股票信息
+        const b = info.basic || {};
+        document.getElementById('stock-title').textContent = `${tsCode} ${b.name || ''}`;
+        document.getElementById('stock-info').textContent =
+            `${b.industry || ''} · ${b.area || ''} · 上市 ${b.list_date || '?'}`;
+
+        // 指标卡片
+        const m = info.latest_metrics || {};
+        const cards = [
+            { label: '最新价', value: m.close ? m.close.toFixed(2) : '-' },
+            { label: 'PE(TTM)', value: m.pe_ttm ? m.pe_ttm.toFixed(2) : '-' },
+            { label: 'PB', value: m.pb ? m.pb.toFixed(2) : '-' },
+            { label: '总市值', value: m.total_mv ? (m.total_mv/1e8).toFixed(0)+'亿' : '-' },
+            { label: '换手率', value: m.turnover_rate ? m.turnover_rate.toFixed(2)+'%' : '-' },
+            { label: '股息率', value: m.dv_ratio ? m.dv_ratio.toFixed(2)+'%' : '-' },
+        ];
+        document.getElementById('metrics-row').innerHTML = cards.map(c =>
+            `<div class="card p-3 text-center">
+                <div class="text-xs text-slate-400">${c.label}</div>
+                <div class="text-lg font-bold text-cyan-400 metric-value">${c.value}</div>
+            </div>`
+        ).join('');
+
+        // 渲染图表
+        if (klineData.length > 0) {
+            renderKline(klineData);
+        }
+        if (basicData.length > 0) {
+            renderPEPB(basicData);
+        }
+    } catch (e) {
+        document.getElementById('stock-info').textContent = '加载失败: ' + e.message;
+    }
+}
+
+// ---- 搜索 ----
+let searchTimer;
+document.getElementById('stock-search').addEventListener('input', function() {
+    clearTimeout(searchTimer);
+    const q = this.value.trim();
+    if (!q) { document.getElementById('search-results').classList.add('hidden'); return; }
+    searchTimer = setTimeout(async () => {
+        const resp = await fetch(`/api/stocks/search?q=${encodeURIComponent(q)}`);
+        const results = await resp.json();
+        const dd = document.getElementById('search-results');
+        if (results.length === 0) {
+            dd.innerHTML = '<div class="px-3 py-2 text-xs text-slate-500">无结果</div>';
+        } else {
+            dd.innerHTML = results.slice(0, 15).map(r =>
+                `<div class="px-3 py-2 text-sm hover:bg-slate-600 cursor-pointer border-b border-slate-700"
+                      onclick="selectStock('${r.ts_code}','${r.name || ''}')">
+                    <span class="text-cyan-400 font-mono">${r.ts_code}</span>
+                    <span class="text-slate-300 ml-2">${r.name || ''}</span>
+                    <span class="text-xs text-slate-500 ml-2">${r.industry || ''}</span>
+                </div>`
+            ).join('');
+        }
+        dd.classList.remove('hidden');
+    }, 250);
+});
+
+// 点击外部关闭搜索
+document.addEventListener('click', e => {
+    if (!e.target.closest('#stock-search') && !e.target.closest('#search-results')) {
+        document.getElementById('search-results').classList.add('hidden');
+    }
+});
+
+function selectStock(code, name) {
+    document.getElementById('stock-search').value = `${code} ${name}`;
+    document.getElementById('search-results').classList.add('hidden');
+    loadStock(code);
+}
+
+document.getElementById('btn-load').addEventListener('click', () => {
+    const val = document.getElementById('stock-search').value.trim();
+    const code = val.split(/\s+/)[0];
+    if (code) loadStock(code);
+});
+
+document.getElementById('timeframe').addEventListener('change', () => {
+    if (currentCode) loadStock(currentCode);
+});
+
+// 回车触发加载
+document.getElementById('stock-search').addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+        const val = e.target.value.trim();
+        const code = val.split(/\s+/)[0];
+        if (code) { document.getElementById('search-results').classList.add('hidden'); loadStock(code); }
+    }
+});
+
+// 页面加载完成后自适应
+window.addEventListener('resize', () => {
+    if (klineChart) { klineChart.applyOptions({ width: document.getElementById('kline-chart').clientWidth }); }
+    if (volumeChart) { volumeChart.applyOptions({ width: document.getElementById('volume-chart').clientWidth }); }
+    const peDom = document.getElementById('chart-pepb');
+    if (peDom._echart) peDom._echart.resize();
+});
+</script>
+{% endblock %}

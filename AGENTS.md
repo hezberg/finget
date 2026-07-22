@@ -322,6 +322,12 @@ finget scan                            # 按策略配置扫描补齐缺失数据
 finget stats                           # 查看所有数据表统计
 finget show daily -n 10                # 查看表内容
 finget show daily -o output.csv        # 导出为 CSV
+
+# Web 数据展示前端
+finget serve                           # 启动 Web 仪表盘 (http://127.0.0.1:8000)
+finget serve -p 9000                   # 指定端口
+finget serve --host 0.0.0.0            # 局域网可访问
+finget serve --reload                  # 开发模式热重载
 ```
 
 **命令层级**:
@@ -336,6 +342,7 @@ finget show daily -o output.csv        # 导出为 CSV
 | `finget scan` | 查漏补缺 | 按 `config.yaml` 配置扫描 |
 | `finget stats` | 数据统计 | 行数/标的数/日期范围/覆盖率 |
 | `finget show <table>` | 查看表内容 | 快速查看或导出 |
+| `finget serve` | Web 前端 | 仪表盘/K线/研报/调研/金股 |
 
 **可用数据集**: daily, weekly, adj_factor, daily_basic, trade_cal, report_rc, stk_factor_pro, broker_recommend, stk_surv, hk_us_basic, stock_basic
 
@@ -699,6 +706,22 @@ uv run finget show daily -n 100 -o out.csv  # 导出前 100 行到 CSV
 uv run finget stats                         # 各表行数 / 时间范围
 ```
 
-## 11. 变更日志
+## 11. Web Server 架构 (`server/`)
+
+`finget serve` 启动 FastAPI 服务，提供 Web 数据展示前端。
+
+**分层**: DuckDB ──→ StoreReader（线程安全）──→ FastAPI ──→ 浏览器
+
+**API 端点** (14 个): `/api/overview`, `/api/stocks/search`, `/api/stocks/{ts_code}`, `/api/kline/{ts_code}`, `/api/indicators/{ts_code}`, `/api/daily_basic/{ts_code}`, `/api/research/{ts_code}`, `/api/research/{ts_code}/eps_trend`, `/api/research/orgs`, `/api/survey/{ts_code}`, `/api/broker_recommend`, `/api/broker_recommend/heatmap`, `/api/broker_recommend/months`, `/api/broker_recommend/brokers`
+
+**页面** (5 个): 仪表盘 `/`（ECharts），K线分析 `/kline`（TradingView LW Charts），研报中心 `/research`（ECharts + 表格），机构调研 `/survey`（时间线），券商金股 `/broker`（热力图）
+
+**关键设计**:
+- `StoreReader`: `threading.Lock` + 单 DuckDB 连接保证并发安全
+- `_norm_date()`: 统一日期格式为 `YYYY-MM-DD`（DuckDB DATE 类型要求，不是 `YYYYMMDD`）
+- 模板: Tailwind CSS CDN + Jinja2，暗色主题；K线红涨绿跌（中国习惯）
+- CLI: `finget serve --host/--port/--reload`
+
+## 12. 变更日志
 
 已迁移到独立文件 [`CHANGELOG.md`](./CHANGELOG.md)。

@@ -671,5 +671,64 @@ def show(table_name: str, output: str | None, limit: int) -> None:
     store.close()
 
 
+# =========================================================================
+# serve — 启动 Web 数据展示前端
+# =========================================================================
+
+@main.command()
+@click.option(
+    "--host",
+    default="0.0.0.0",
+    show_default=True,
+    help="绑定的 IP 地址（0.0.0.0 监听所有网卡，127.0.0.1 仅本地）",
+)
+@click.option(
+    "--port",
+    "-p",
+    default=8000,
+    show_default=True,
+    type=int,
+    help="端口号",
+)
+@click.option(
+    "--reload",
+    is_flag=True,
+    default=False,
+    help="开启热重载（开发模式，代码变更自动重启）",
+)
+def serve(host: str, port: int, reload: bool) -> None:
+    """启动 Web 数据展示前端.
+
+    提供仪表盘、K线分析、研报中心、机构调研、券商金股
+    等数据展示页面。
+
+    默认监听 0.0.0.0:8000（局域网可访问），使用 --host 127.0.0.1 仅本地。
+
+    示例:
+      finget serve                     # 默认 127.0.0.1:8000
+      finget serve -p 9000             # 指定端口
+      finget serve --host 0.0.0.0      # 局域网可访问
+      finget serve --reload            # 开发模式热重载
+    """
+    import uvicorn
+
+    console.print(f"[bold cyan]🚀 finget Dashboard 启动中...[/bold cyan]")
+    console.print(f"   地址: [cyan]http://{host}:{port}[/cyan]")
+    console.print(f"   仪表盘: [dim]http://{host}:{port}/[/dim]")
+    console.print(f"   K线分析: [dim]http://{host}:{port}/kline[/dim]")
+    console.print(f"   研报中心: [dim]http://{host}:{port}/research[/dim]")
+    console.print(f"   机构调研: [dim]http://{host}:{port}/survey[/dim]")
+    console.print(f"   券商金股: [dim]http://{host}:{port}/broker[/dim]")
+    console.print("[dim]按 Ctrl+C 停止服务[/dim]")
+
+    uvicorn.run(
+        "finget.server.app:app",
+        host=host,
+        port=port,
+        reload=reload,
+        log_level="warning",
+    )
+
+
 if __name__ == "__main__":
     main()

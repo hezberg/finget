@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% block title %}机构调研 — finget{% endblock %}
+{% block head_extra %}
+<style>
+    .timeline::before {
+        content: '';
+        position: absolute;
+        left: 8px; top: 0; bottom: 0;
+        width: 2px;
+        background: #334155;
+    }
+    .timeline-dot {
+        width: 10px; height: 10px;
+        border-radius: 50%;
+        background: #22d3ee;
+        position: absolute;
+        left: 4px; top: 5px;
+    }
+    .content-collapsed { max-height: 120px; overflow: hidden; position: relative; }
+    .content-collapsed::after {
+        content: '';
+        position: absolute;
+        bottom: 0; left: 0; right: 0;
+        height: 40px;
+        background: linear-gradient(transparent, #1e293b);
+    }
+    .content-expanded { max-height: none; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="p-4 max-w-5xl mx-auto">
+    <div class="flex flex-wrap items-center gap-3 mb-4">
+        <div class="relative">
+            <input type="text" id="stock-search" placeholder="搜索股票..."
+                   class="bg-slate-800 border border-slate-600 rounded px-3 py-2 text-sm text-slate-100
+                          placeholder-slate-500 focus:outline-none focus:border-cyan-400 w-52"
+                   autocomplete="off">
+            <div id="search-results" class="search-dropdown absolute z-50 w-full bg-slate-800 border border-slate-600
+                         rounded-b shadow-lg hidden"></div>
+        </div>
+        <button id="btn-load" class="bg-cyan-600 hover:bg-cyan-500 text-white text-sm px-4 py-2 rounded font-medium">
+            查询
+        </button>
+        <label class="flex items-center gap-2 text-xs text-slate-400 ml-4">
+            <input type="checkbox" id="with-content" class="rounded bg-slate-700 border-slate-600">
+            含调研内容
+        </label>
+        <span id="stock-title" class="text-lg font-bold text-slate-200 ml-2">— 请选择股票</span>
+    </div>
+
+    <!-- 调研时间线 -->
+    <div id="survey-list" class="space-y-3">
+        <div class="card p-6 text-center text-slate-500 text-sm">请先选择股票查看机构调研记录</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentCode = '';
+
+async function loadSurvey(tsCode) {
+    currentCode = tsCode;
+    document.getElementById('stock-title').textContent = tsCode;
+
+    const withContent = document.getElementById('with-content').checked;
+
+    try {
+        const [infoResp, surveyResp] = await Promise.all([
+            fetch(`/api/stocks/${tsCode}`),
+            fetch(`/api/survey/${tsCode}?limit=100&with_content=${withContent}`),
+        ]);
+
+        const info = await infoResp.json();
+        const surveys = await surveyResp.json();
+        const b = info.basic || {};
+        document.getElementById('stock-title').textContent = `${tsCode} ${b.name || ''}`;
+
+        const container = document.getElementById('survey-list');
+
+        if (surveys.length === 0) {
+            container.innerHTML = '<div class="card p-6 text-center text-slate-500 text-sm">暂无调研记录</div>';
+            return;
+        }
+
+        container.innerHTML = `<div class="text-xs text-slate-500 mb-3">共 ${surveys.length} 条调研记录</div>
+            <div class="relative timeline pl-8">` +
+            surveys.map((s, i) => `
+                <div class="relative pb-4">
+                    <div class="timeline-dot" style="top:5px"></div>
+                    <div class="card p-4">
+                        <div class="flex flex-wrap items-center gap-2 mb-2">
+                            <span class="text-xs text-cyan-400 font-mono">${(s.surv_date || '').substring(0,10)}</span>
+                            <span class="text-xs font-medium text-slate-200">${s.rece_org || '-'}</span>
+                            <span class="text-xs text-slate-500">${s.rece_mode || ''} · ${s.rece_place || ''}</span>
+                            <span class="text-xs text-slate-500 ml-auto">${s.org_type || ''}</span>
+                        </div>
+                        <div class="text-xs text-slate-400 mb-1">
+                            接待人: ${s.comp_rece || '-'} ·
+                            参与机构: ${s.fund_visitors || '-'}
+                        </div>
+                        ${s.content ? `
+                        <div id="content-${i}" class="content-collapsed text-xs text-slate-300 mt-2 leading-relaxed">
+                            ${s.content}
+                        </div>
+                        <button onclick="toggleContent(${i})" id="btn-${i}"
+                                class="text-xs text-cyan-400 hover:text-cyan-300 mt-1">
+                            展开全文
+                        </button>` : ''}
+                    </div>
+                </div>
+            `).join('') +
+            '</div>';
+    } catch (e) {
+        document.getElementById('stock-title').textContent = '加载失败: ' + e.message;
+    }
+}
+
+function toggleContent(i) {
+    const el = document.getElementById('content-' + i);
+    const btn = document.getElementById('btn-' + i);
+    if (!el || !btn) return;
+    const isCollapsed = el.classList.contains('content-collapsed');
+    if (isCollapsed) {
+        el.classList.remove('content-collapsed');
+        el.classList.add('content-expanded');
+        btn.textContent = '收起';
+    } else {
+        el.classList.add('content-collapsed');
+        el.classList.remove('content-expanded');
+        btn.textContent = '展开全文';
+    }
+}
+
+// 切换 with_content 重新加载
+document.getElementById('with-content').addEventListener('change', () => {
+    if (currentCode) loadSurvey(currentCode);
+});
+
+// ---- 搜索 ----
+let searchTimer;
+document.getElementById('stock-search').addEventListener('input', function() {
+    clearTimeout(searchTimer);
+    const q = this.value.trim();
+    if (!q) { document.getElementById('search-results').classList.add('hidden'); return; }
+    searchTimer = setTimeout(async () => {
+        const resp = await fetch(`/api/stocks/search?q=${encodeURIComponent(q)}`);
+        const results = await resp.json();
+        const dd = document.getElementById('search-results');
+        dd.innerHTML = results.length === 0
+            ? '<div class="px-3 py-2 text-xs text-slate-500">无结果</div>'
+            : results.slice(0, 15).map(r =>
+                `<div class="px-3 py-2 text-sm hover:bg-slate-600 cursor-pointer border-b border-slate-700"
+                      onclick="selectStock('${r.ts_code}','${r.name||''}')">
+                    <span class="text-cyan-400 font-mono">${r.ts_code}</span>
+                    <span class="text-slate-300 ml-2">${r.name||''}</span>
+                </div>`).join('');
+        dd.classList.remove('hidden');
+    }, 250);
+});
+
+document.addEventListener('click', e => {
+    if (!e.target.closest('#stock-search') && !e.target.closest('#search-results'))
+        document.getElementById('search-results').classList.add('hidden');
+});
+
+function selectStock(code, name) {
+    document.getElementById('stock-search').value = `${code} ${name}`;
+    document.getElementById('search-results').classList.add('hidden');
+    loadSurvey(code);
+}
+
+document.getElementById('btn-load').addEventListener('click', () => {
+    const code = document.getElementById('stock-search').value.trim().split(/\s+/)[0];
+    if (code) loadSurvey(code);
+});
+
+document.getElementById('stock-search').addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+        document.getElementById('search-results').classList.add('hidden');
+        const code = e.target.value.trim().split(/\s+/)[0];
+        if (code) loadSurvey(code);
+    }
+});
+</script>
+{% endblock %}

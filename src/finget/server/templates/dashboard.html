@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}仪表盘 — finget{% endblock %}
+{% block head_extra %}
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>
+{% endblock %}
+{% block content %}
+<div class="p-6 max-w-7xl mx-auto">
+    <h1 class="text-2xl font-bold mb-6">数据总览</h1>
+
+    <!-- 统计卡片 -->
+    <div id="stats-cards" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
+        <div class="card p-4 text-center animate-pulse"><div class="text-slate-400 text-xs">加载中...</div></div>
+    </div>
+
+    <!-- 图表行 -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        <div class="card p-4">
+            <h2 class="text-sm font-semibold text-slate-300 mb-3">行业分布</h2>
+            <div id="chart-industry" style="height:350px;"></div>
+        </div>
+        <div class="card p-4">
+            <h2 class="text-sm font-semibold text-slate-300 mb-3">各表数据量</h2>
+            <div id="chart-rows" style="height:350px;"></div>
+        </div>
+    </div>
+
+    <!-- 表格 -->
+    <div class="card p-4">
+        <h2 class="text-sm font-semibold text-slate-300 mb-3">数据详情</h2>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm text-left" id="detail-table">
+                <thead class="text-xs text-slate-400 uppercase bg-slate-800">
+                    <tr>
+                        <th class="px-4 py-2">表名</th>
+                        <th class="px-4 py-2 text-right">行数</th>
+                        <th class="px-4 py-2 text-right">标的数</th>
+                        <th class="px-4 py-2">最早日期</th>
+                        <th class="px-4 py-2">最新日期</th>
+                    </tr>
+                </thead>
+                <tbody class="text-slate-300"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(async () => {
+    // 加载总览数据
+    const resp = await fetch('/api/overview');
+    const data = await resp.json();
+
+    // 统计卡片
+    const totalRows = data.reduce((s, t) => s + t.rows, 0);
+    const totalStocks = data.find(t => t.table === 'stock_basic')?.stock_count || 0;
+    const tableCount = data.length;
+
+    const cards = [
+        { label: '数据表', value: tableCount, unit: '张' },
+        { label: '总行数', value: totalRows.toLocaleString(), unit: '行' },
+        { label: 'A股标的', value: totalStocks, unit: '只' },
+        { label: '时序表', value: data.filter(t => ['daily','weekly','adj_factor','daily_basic','stk_factor_pro'].includes(t.table)).length, unit: '张' },
+        { label: '研究数据', value: data.filter(t => ['report_rc','broker_recommend','stk_surv'].includes(t.table)).length, unit: '张' },
+    ];
+    document.getElementById('stats-cards').innerHTML = cards.map(c =>
+        `<div class="card p-4 text-center">
+            <div class="text-xs text-slate-400 mb-1">${c.label}</div>
+            <div class="text-2xl font-bold text-cyan-400">${c.value}</div>
+            <div class="text-xs text-slate-500">${c.unit}</div>
+        </div>`
+    ).join('');
+
+    // 各表数据量柱状图
+    const chartRows = echarts.init(document.getElementById('chart-rows'));
+    const tableData = data.filter(t => !['stk_surv_detail'].includes(t.table));
+    chartRows.setOption({
+        tooltip: { trigger: 'axis' },
+        grid: { left: 100, right: 40, top: 10, bottom: 30 },
+        xAxis: { type: 'value', axisLabel: { color: '#94a3b8', formatter: v => v > 10000 ? (v/10000).toFixed(1)+'万' : v } },
+        yAxis: { type: 'category', data: tableData.map(t => t.table), inverse: true, axisLabel: { color: '#94a3b8', fontSize: 11 } },
+        series: [{
+            type: 'bar', data: tableData.map(t => t.rows),
+            itemStyle: { color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                { offset: 0, color: '#06b6d4' }, { offset: 1, color: '#22d3ee' }
+            ]), borderRadius: [0, 4, 4, 0] },
+            label: { show: true, position: 'right', color: '#94a3b8', fontSize: 10,
+                formatter: p => p.value > 10000 ? (p.value/10000).toFixed(1)+'万' : p.value }
+        }]
+    });
+
+    // 行业分布饼图
+    const indResp = await fetch('/api/industry_dist');
+    const indData = await indResp.json();
+    const top10 = indData.slice(0, 10);
+    const otherCount = indData.slice(10).reduce((s, i) => s + i.cnt, 0);
+    const pieData = top10.map(i => ({ name: i.industry, value: i.cnt }));
+    if (otherCount > 0) pieData.push({ name: '其他', value: otherCount });
+
+    const chartInd = echarts.init(document.getElementById('chart-industry'));
+    chartInd.setOption({
+        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+        legend: { orient: 'vertical', right: 10, top: 'center', textStyle: { color: '#94a3b8', fontSize: 10 } },
+        series: [{
+            type: 'pie', radius: ['40%', '70%'], center: ['40%', '50%'],
+            data: pieData,
+            label: { color: '#94a3b8', fontSize: 10 },
+            itemStyle: { borderRadius: 4, borderColor: '#0f172a', borderWidth: 2 }
+        }]
+    });
+
+    // 详情表格
+    const tbody = document.querySelector('#detail-table tbody');
+    tbody.innerHTML = data.map(t => `
+        <tr class="border-b border-slate-700 hover:bg-slate-700/50">
+            <td class="px-4 py-2 font-mono text-xs text-cyan-400">${t.table}</td>
+            <td class="px-4 py-2 text-right">${t.rows.toLocaleString()}</td>
+            <td class="px-4 py-2 text-right">${t.stock_count ? t.stock_count.toLocaleString() : '-'}</td>
+            <td class="px-4 py-2 text-xs text-slate-400">${t.min_date || '-'}</td>
+            <td class="px-4 py-2 text-xs text-slate-400">${t.max_date || '-'}</td>
+        </tr>
+    `).join('');
+
+    // 响应式
+    window.addEventListener('resize', () => { chartRows.resize(); chartInd.resize(); });
+})();
+</script>
+{% endblock %}

@@ -2,6 +2,20 @@
 
 > 详细代码变更查 `git log`；本文件记录功能性变更和影响。
 
+## 2026-07-22 — Web 数据展示前端 (finget serve)
+
+- 新增 FastAPI server 模块 (`src/finget/server/`)
+  - REST API: 14 个端点覆盖数据总览、K线、研报、调研、金股
+  - 5 个 HTML 页面：仪表盘 / K线分析 / 研报中心 / 机构调研 / 券商金股
+  - TradingView Lightweight Charts（K线/成交量/均线）+ ECharts（饼图/柱状图/散点/热力图）
+  - 暗色主题 UI（Tailwind CSS CDN）
+- CLI 新增 `finget serve` 命令
+  - `--host` / `--port` / `--reload` 选项
+  - 一键启动，无需额外配置
+- 新增依赖：fastapi、uvicorn、jinja2
+- 测试：26 个新增用例（`tests/test_server.py`）
+- 总计 192 个测试用例
+
 ## 2026-06-24 — 新增 report_rc（卖方盈利预测）
 
 - 加 `report_rc` 数据集：22 列 schema，5 列联合唯一索引 `(ts_code, report_date, org_name, author_name, quarter)`
