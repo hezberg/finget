@@ -120,7 +120,8 @@ function renderKline(data) {
     }));
 
     // K线
-    const candleSeries = klineChart.addCandlestickSeries({
+    const CandleSeries = LightweightCharts.CandlestickSeries;
+    const candleSeries = klineChart.addSeries(CandleSeries, {
         upColor: '#ef4444', downColor: '#22c55e',
         borderUpColor: '#ef4444', borderDownColor: '#22c55e',
         wickUpColor: '#ef4444', wickDownColor: '#22c55e',
@@ -130,10 +131,11 @@ function renderKline(data) {
 
     // 均线 MA5/10/20/60
     const maColors = { 5: '#fbbf24', 10: '#f59e0b', 20: '#ec4899', 60: '#3b82f6' };
+    const LineSeries = LightweightCharts.LineSeries;
     [5, 10, 20, 60].forEach(period => {
         const maData = calcMA(candleData, period);
         if (maData.length > 0) {
-            const line = klineChart.addLineSeries({
+            const line = klineChart.addSeries(LineSeries, {
                 color: maColors[period], lineWidth: 1,
                 lastValueVisible: false, priceLineVisible: false,
             });
@@ -144,7 +146,8 @@ function renderKline(data) {
     });
 
     // 成交量
-    const volSeries = volumeChart.addHistogramSeries({ priceFormat: { type: 'volume' } });
+    const HistSeries = LightweightCharts.HistogramSeries;
+    const volSeries = volumeChart.addSeries(HistSeries, { priceFormat: { type: 'volume' } });
     volSeries.setData(volumeData);
     volSeriesList.push(volSeries);
 
