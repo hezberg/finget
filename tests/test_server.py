@@ -167,7 +167,7 @@ class TestKlineAPI:
     """K线 API."""
 
     def test_kline_daily(self, client):
-        resp = client.get("/api/kline/000001.SZ?table=daily")
+        resp = client.get("/api/kline/000001.SZ?table=daily&adj=None")
         assert resp.status_code == 200
         data = resp.json()
         assert isinstance(data, list)
@@ -178,10 +178,18 @@ class TestKlineAPI:
         assert "volume" in data[0]
 
     def test_kline_with_date_range(self, client):
-        resp = client.get("/api/kline/000001.SZ?start=2024-01-01&end=2024-12-31")
+        resp = client.get("/api/kline/000001.SZ?start=2024-01-01&end=2024-12-31&adj=None")
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 2
+
+    def test_kline_qfq(self, client):
+        resp = client.get("/api/kline/000001.SZ?adj=qfq")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) >= 1
+        # 前复权价格应不为 None
+        assert data[0]["close"] is not None
 
     def test_kline_invalid_table(self, client):
         resp = client.get("/api/kline/000001.SZ?table=invalid")

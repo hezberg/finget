@@ -28,6 +28,17 @@ def _norm_date(d: str) -> str:
     return d
 
 
+def _safe_float(v: Any) -> float | None:
+    """安全转 float，NaN/None → None."""
+    if v is None:
+        return None
+    try:
+        f = float(v)
+        return f if f == f else None  # NaN != NaN
+    except (ValueError, TypeError):
+        return None
+
+
 def _df_to_records(df: pd.DataFrame) -> list[dict[str, Any]]:
     """DataFrame → JSON 可序列化的 dict 列表."""
     if df.empty:
@@ -210,29 +221,53 @@ async def kline(
     table: str = Query("daily", description="daily 或 weekly"),
     start: str | None = Query(None, description="起始日期 YYYY-MM-DD 或 YYYYMMDD"),
     end: str | None = Query(None, description="结束日期"),
+    adj: str | None = Query("qfq", description="复权: qfq=前复权, hfq=后复权, None=不复权"),
     limit: int = Query(500, description="最大返回行数"),
 ):
-    """获取 K 线数据 — 返回 TradingView Lightweight Charts 兼容格式."""
+    """获取 K 线数据 — 返回 TradingView Lightweight Charts 兼容格式.
+
+    默认前复权(qfq)，与券商 app 显示一致。
+    """
     if table not in ("daily", "weekly"):
         raise HTTPException(status_code=400, detail="table 参数仅支持 daily 或 weekly")
 
-    conditions = ["ts_code = ?"]
+    conditions = [f"d.ts_code = ?"]
     params: list[Any] = [ts_code]
 
     if start:
-        conditions.append("trade_date >= ?")
+        conditions.append("d.trade_date >= ?")
         params.append(_norm_date(start))
     if end:
-        conditions.append("trade_date <= ?")
+        conditions.append("d.trade_date <= ?")
         params.append(_norm_date(end))
 
     where = f" WHERE {' AND '.join(conditions)}"
 
-    # daily/weekly 有 open/high/low/close/vol/amount
+    # 复权处理：LEFT JOIN adj_factor，前复权=乘因子，后复权=除因子
+    if adj == "qfq":
+        price_expr = (
+            "d.open * COALESCE(a.adj_factor, 1) AS open, "
+            "d.high * COALESCE(a.adj_factor, 1) AS high, "
+            "d.low * COALESCE(a.adj_factor, 1) AS low, "
+            "d.close * COALESCE(a.adj_factor, 1) AS close"
+        )
+        join = " LEFT JOIN adj_factor a ON d.ts_code = a.ts_code AND d.trade_date = a.trade_date"
+    elif adj == "hfq":
+        price_expr = (
+            "d.open / COALESCE(NULLIF(a.adj_factor, 0), 1) AS open, "
+            "d.high / COALESCE(NULLIF(a.adj_factor, 0), 1) AS high, "
+            "d.low / COALESCE(NULLIF(a.adj_factor, 0), 1) AS low, "
+            "d.close / COALESCE(NULLIF(a.adj_factor, 0), 1) AS close"
+        )
+        join = " LEFT JOIN adj_factor a ON d.ts_code = a.ts_code AND d.trade_date = a.trade_date"
+    else:
+        price_expr = "d.open, d.high, d.low, d.close"
+        join = ""
+
     sql = (
-        f"SELECT trade_date, open, high, low, close, vol, amount "
-        f"FROM {table}{where} "
-        f"ORDER BY trade_date ASC "
+        f"SELECT d.trade_date, {price_expr}, d.vol, d.amount "
+        f"FROM {table} d{join}{where} "
+        f"ORDER BY d.trade_date ASC "
         f"LIMIT {limit}"
     )
     df = _query(sql, params)
@@ -242,12 +277,12 @@ async def kline(
         d = str(row["trade_date"])[:10] if row["trade_date"] else None
         records.append({
             "time": d,
-            "open": row["open"] if row["open"] is not None else None,
-            "high": row["high"] if row["high"] is not None else None,
-            "low": row["low"] if row["low"] is not None else None,
-            "close": row["close"] if row["close"] is not None else None,
-            "volume": row["vol"] if row["vol"] is not None else None,
-            "amount": row["amount"] if row["amount"] is not None else None,
+            "open": _safe_float(row.get("open")),
+            "high": _safe_float(row.get("high")),
+            "low": _safe_float(row.get("low")),
+            "close": _safe_float(row.get("close")),
+            "volume": _safe_float(row.get("vol")),
+            "amount": _safe_float(row.get("amount")),
         })
     return records
 

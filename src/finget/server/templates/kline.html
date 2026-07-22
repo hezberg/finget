@@ -211,7 +211,7 @@ async function loadStock(tsCode) {
     try {
         // 并行加载 K线、指标、股票信息
         const [klineResp, infoResp, basicResp] = await Promise.all([
-            fetch(`/api/kline/${tsCode}?table=${table}&limit=500`),
+            fetch(`/api/kline/${tsCode}?table=${table}&limit=500&adj=qfq`),
             fetch(`/api/stocks/${tsCode}`),
             fetch(`/api/daily_basic/${tsCode}?limit=500`),
         ]);
