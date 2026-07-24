@@ -315,10 +315,11 @@ class UpdateStrategy:
                 page_size=page_size,
             )
             if not member_df.empty:
-                # ths_member 列: ts_code, name, concept_code / con_code
+                # ths_member 列: ts_code, name(股票名), con_code, con_name(概念名)
                 member_df["src"] = "member"
                 member_df = member_df.rename(columns={
                     "con_code": "index_code",
+                    "con_name": "index_name",
                 })
                 member_rows.append(member_df)
                 log.info(f"{dataset.name}: ths_member fetched {len(member_df)} rows")
@@ -331,52 +332,38 @@ class UpdateStrategy:
         # 最终表: (ts_code, stock_name, index_code, index_name, index_type, src)
 
         if not member_rows:
-            log.warning(f"{dataset.name}: no member data, only classification metadata")
-            # 如果只有分类数据（无成分股），也写入分类元数据
-            if frames:
-                meta = pd.concat(frames, ignore_index=True)
-                # 确保有 ts_code 列（填 None）
-                if "ts_code" not in meta.columns:
-                    meta["ts_code"] = None
-                if "name" not in meta.columns:
-                    meta["name"] = None
-                n = self.store.upsert(dataset.name, meta, conflict_keys=["ts_code", "index_code"])
-                log.info(f"{dataset.name}: upserted {n} metadata rows")
-                return n
+            log.warning(f"{dataset.name}: no member data")
             return 0
 
         members = pd.concat(member_rows, ignore_index=True)
 
-        if frames:
-            # 合并分类信息到成分股
+        # 确保必要列存在
+        for col in ["ts_code", "index_code"]:
+            if col not in members.columns:
+                log.warning(f"{dataset.name}: missing column '{col}' in member data")
+                return 0
+
+        # 如果 member 没有 index_name（con_name 已重命名），尝试从分类 lookup 补全
+        if frames and "index_name" not in members.columns:
             lookup = pd.concat(frames, ignore_index=True)
-            # 按 index_code 关联，把 index_name / index_type 填到成分股上
-            if "index_code" in lookup.columns and "index_code" in members.columns:
-                merged = members.merge(
-                    lookup[["index_code", "index_name", "index_type", "src"]],
-                    on="index_code",
-                    how="left",
-                    suffixes=("", "_cls"),
+            if "index_code" in lookup.columns and "index_name" in lookup.columns:
+                members = members.merge(
+                    lookup[["index_code", "index_name", "index_type"]],
+                    on="index_code", how="left", suffixes=("", "_cls"),
                 )
-                # 用分类表的 name/type 覆盖（如果成分股里没有的话）
-                if "index_name_cls" in merged.columns:
-                    merged["index_name"] = merged["index_name"].fillna(merged["index_name_cls"])
-                    merged = merged.drop(columns=["index_name_cls"])
-                if "index_type_cls" in merged.columns:
-                    merged["index_type"] = merged["index_type"].fillna(merged["index_type_cls"])
-                    merged = merged.drop(columns=["index_type_cls"])
-                # src 取成分股的
-                merged["src"] = merged.get("src", "member")
-            else:
-                merged = members
-        else:
-            merged = members
+                # 用分类表的 index_name 补全
+                if "index_name_cls" in members.columns:
+                    members["index_name"] = members["index_name"].fillna(members["index_name_cls"]) if "index_name" in members.columns else members["index_name_cls"]
+                    members = members.drop(columns=["index_name_cls"])
+                if "index_type_cls" in members.columns:
+                    members["index_type"] = members["index_type"].fillna(members["index_type_cls"]) if "index_type" in members.columns else members["index_type_cls"]
+                    members = members.drop(columns=["index_type_cls"])
 
-        # 重命名 stock name 列为 name
-        if "con_name" in merged.columns:
-            merged["name"] = merged["con_name"]
+        # 确保 src 列
+        if "src" not in members.columns:
+            members["src"] = "member"
 
-        n = self.store.upsert(dataset.name, merged, conflict_keys=["ts_code", "index_code"])
+        n = self.store.upsert(dataset.name, members, conflict_keys=["ts_code", "index_code"])
         log.info(f"{dataset.name}: upserted {n} rows")
         return n
 
