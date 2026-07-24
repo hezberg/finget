@@ -8,10 +8,8 @@ from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
     Progress,
-    SpinnerColumn,
     TaskProgressColumn,
     TextColumn,
-    TimeElapsedColumn,
 )
 
 console = Console()

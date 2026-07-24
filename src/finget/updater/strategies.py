@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
-from typing import Any
 
 import pandas as pd
 
@@ -17,6 +16,7 @@ from finget.storage.duckdb_store import (
     CALENDAR_DATASETS,
     HK_US_BASIC_DATASETS,
     SURVEY_DATASETS,
+    THS_INDEX_DATASETS,
     TIME_SERIES_DATASETS,
     DuckDBStore,
 )
@@ -122,6 +122,8 @@ class UpdateStrategy:
             return self._update_broker(dataset, start_date, end_date)
         elif dataset.type in SURVEY_DATASETS:
             return self._update_survey(dataset, ts_codes, start_date, end_date)
+        elif dataset.type in THS_INDEX_DATASETS:
+            return self._update_ths_index(dataset)
         elif dataset.type in TIME_SERIES_DATASETS:
             if dataset.daily_supported and not ts_codes:
                 return self._update_by_date(dataset, start_date, end_date)
@@ -244,6 +246,138 @@ class UpdateStrategy:
         merged = pd.concat(frames, ignore_index=True)
         n = self.store.upsert(dataset.name, merged, conflict_keys=["ts_code"])
         log.info(f"{dataset.name}: upserted {n} rows (hk + us merged)")
+        return n
+
+    # ------------------------------------------------------------------
+    # 同花顺概念/行业成分股（ths_index + ths_sector + ths_member 合并）
+    # ------------------------------------------------------------------
+
+    def _update_ths_index(self, dataset: DatasetConfig) -> int:
+        """更新同花顺概念/行业成分股.
+
+        合并三个 tushare API：
+        1. ths_index (doc 259) — 概念板块分类（code, name, type）
+        2. ths_sector (doc 260) — 行业板块分类
+        3. ths_member (doc 261) — 概念板块成分股（ts_code, name → concept_code）
+
+        最终合并为一张表 (ts_code, name, index_code, index_name, index_type, src).
+        每个 (ts_code, index_code) 唯一。
+        """
+        page_size = 5000
+        frames: list[pd.DataFrame] = []
+
+        # --- 1. ths_index：概念分类 ---
+        try:
+            idx_df = self.fetcher.fetch_all(
+                api_name="ths_index",
+                params={},
+                page_size=page_size,
+            )
+            if not idx_df.empty:
+                idx_df["src"] = "index"
+                # 适配列名: code→index_code, name→index_name, type→index_type
+                idx_df = idx_df.rename(columns={
+                    "code": "index_code",
+                    "name": "index_name",
+                    "type": "index_type",
+                })
+                # ths_index 没有 ts_code（它只是分类列表），暂时留空
+                frames.append(idx_df)
+                log.info(f"{dataset.name}: ths_index fetched {len(idx_df)} concepts")
+        except Exception as e:
+            log.warning(f"{dataset.name}: ths_index failed: {e}")
+
+        # --- 2. ths_sector：行业分类（结构与 ths_index 类似） ---
+        try:
+            sec_df = self.fetcher.fetch_all(
+                api_name="ths_sector",
+                params={},
+                page_size=page_size,
+            )
+            if not sec_df.empty:
+                sec_df["src"] = "sector"
+                sec_df = sec_df.rename(columns={
+                    "code": "index_code",
+                    "name": "index_name",
+                    "type": "index_type",
+                })
+                frames.append(sec_df)
+                log.info(f"{dataset.name}: ths_sector fetched {len(sec_df)} sectors")
+        except Exception as e:
+            log.warning(f"{dataset.name}: ths_sector failed: {e}")
+
+        # --- 3. ths_member：成分股映射 ---
+        member_rows: list[pd.DataFrame] = []
+        try:
+            member_df = self.fetcher.fetch_all(
+                api_name="ths_member",
+                params={},
+                page_size=page_size,
+            )
+            if not member_df.empty:
+                # ths_member 列: ts_code, name, concept_code / con_code
+                member_df["src"] = "member"
+                member_df = member_df.rename(columns={
+                    "con_code": "index_code",
+                })
+                member_rows.append(member_df)
+                log.info(f"{dataset.name}: ths_member fetched {len(member_df)} rows")
+        except Exception as e:
+            log.warning(f"{dataset.name}: ths_member failed: {e}")
+
+        # --- 合并 ---
+        # 策略：从 ths_index / ths_sector 拿到所有概念/行业的 (code, name, type)
+        # 然后与 ths_member 的 (ts_code, concept_code) 做 JOIN
+        # 最终表: (ts_code, stock_name, index_code, index_name, index_type, src)
+
+        if not member_rows:
+            log.warning(f"{dataset.name}: no member data, only classification metadata")
+            # 如果只有分类数据（无成分股），也写入分类元数据
+            if frames:
+                meta = pd.concat(frames, ignore_index=True)
+                # 确保有 ts_code 列（填 None）
+                if "ts_code" not in meta.columns:
+                    meta["ts_code"] = None
+                if "name" not in meta.columns:
+                    meta["name"] = None
+                n = self.store.upsert(dataset.name, meta, conflict_keys=["ts_code", "index_code"])
+                log.info(f"{dataset.name}: upserted {n} metadata rows")
+                return n
+            return 0
+
+        members = pd.concat(member_rows, ignore_index=True)
+
+        if frames:
+            # 合并分类信息到成分股
+            lookup = pd.concat(frames, ignore_index=True)
+            # 按 index_code 关联，把 index_name / index_type 填到成分股上
+            if "index_code" in lookup.columns and "index_code" in members.columns:
+                merged = members.merge(
+                    lookup[["index_code", "index_name", "index_type", "src"]],
+                    on="index_code",
+                    how="left",
+                    suffixes=("", "_cls"),
+                )
+                # 用分类表的 name/type 覆盖（如果成分股里没有的话）
+                if "index_name_cls" in merged.columns:
+                    merged["index_name"] = merged["index_name"].fillna(merged["index_name_cls"])
+                    merged = merged.drop(columns=["index_name_cls"])
+                if "index_type_cls" in merged.columns:
+                    merged["index_type"] = merged["index_type"].fillna(merged["index_type_cls"])
+                    merged = merged.drop(columns=["index_type_cls"])
+                # src 取成分股的
+                merged["src"] = merged.get("src", "member")
+            else:
+                merged = members
+        else:
+            merged = members
+
+        # 重命名 stock name 列为 name
+        if "con_name" in merged.columns:
+            merged["name"] = merged["con_name"]
+
+        n = self.store.upsert(dataset.name, merged, conflict_keys=["ts_code", "index_code"])
+        log.info(f"{dataset.name}: upserted {n} rows")
         return n
 
     # ------------------------------------------------------------------
@@ -853,8 +987,8 @@ class UpdateStrategy:
         )
 
         fetch_chunk = 5  # 每 5 天并发拉取一批
-        from finget.fetchers.tushare_fetcher import TushareFetcher
         from finget.fetchers.progress import create_progress
+        from finget.fetchers.tushare_fetcher import TushareFetcher
 
         with create_progress() as progress:
             task = progress.add_task(

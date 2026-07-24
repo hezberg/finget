@@ -7,7 +7,6 @@ from typing import Any
 
 import pandas as pd
 
-from finget.logging import log
 from finget.storage.duckdb_store import DuckDBStore
 
 
@@ -291,6 +290,46 @@ class DataReader:
         else:
             sql = f"SELECT * FROM stk_surv s{where} ORDER BY surv_date DESC, ts_code;"
         return self.store.query(sql, params)
+
+    # ------------------------------------------------------------------
+    # 同花顺概念/行业
+    # ------------------------------------------------------------------
+
+    def get_ths_index(
+        self,
+        ts_code: str | None = None,
+        index_name: str | None = None,
+        index_type: str | None = None,
+    ) -> pd.DataFrame:
+        """获取同花顺概念/行业成分股.
+
+        Args:
+            ts_code: 股票代码; None 则全部.
+            index_name: 概念/行业名称（模糊匹配）; None 则全部.
+            index_type: N=概念, I=行业, R=地域; None 则全部.
+
+        Returns:
+            DataFrame, 按 index_name, ts_code 排序.
+        """
+        conditions: list[str] = []
+        params: list[Any] = []
+        if ts_code:
+            conditions.append("ts_code = ?")
+            params.append(ts_code)
+        if index_name:
+            conditions.append("index_name LIKE ?")
+            params.append(f"%{index_name}%")
+        if index_type:
+            conditions.append("index_type = ?")
+            params.append(index_type)
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"SELECT * FROM ths_index{where} ORDER BY index_name, ts_code;"
+        return self.store.query(sql, params)
+
+    def get_ths_concepts(self, ts_code: str) -> list[str]:
+        """获取某只股票所属的概念/行业列表."""
+        df = self.get_ths_index(ts_code=ts_code)
+        return df["index_name"].tolist() if not df.empty else []
 
     # ------------------------------------------------------------------
     # 通用查询

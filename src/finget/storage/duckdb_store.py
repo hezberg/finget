@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import duckdb
 import pandas as pd
@@ -436,6 +437,17 @@ SCHEMAS: dict[str, str] = {
             enname    VARCHAR
         )
     """,
+    # 同花顺概念/行业成分股（ths_index + ths_sector + ths_member 三 API 合并）
+    "ths_index": """
+        CREATE TABLE IF NOT EXISTS {table} (
+            ts_code     VARCHAR,
+            name        VARCHAR,
+            index_code  VARCHAR,
+            index_name  VARCHAR,
+            index_type  VARCHAR,
+            src         VARCHAR
+        )
+    """,
 }
 
 # 数据集类型 → UNIQUE 索引列
@@ -452,6 +464,8 @@ _CONFLICT_KEYS: dict[str, list[str]] = {
     "stk_surv_detail": ["ts_code", "surv_date", "rece_org"],
     # hk_us_basic: 港股和美股 ts_code 后缀不同（.HK/.US），不会冲突
     "hk_us_basic": ["ts_code"],
+    # ths_index: 同一股票在同一概念/行业中只出现一次
+    "ths_index": ["ts_code", "index_code"],
 }
 
 # 时序数据集（含 trade_date），用于增量/补漏判断
@@ -468,6 +482,9 @@ SURVEY_DATASETS = {"stk_surv"}
 
 # 港美股基础信息类数据集（hk_basic + us_basic 两个接口合并写入一张表）
 HK_US_BASIC_DATASETS = {"hk_us_basic"}
+
+# 同花顺概念/行业（需合并多个 API）
+THS_INDEX_DATASETS = {"ths_index"}
 
 
 class DuckDBStore:
@@ -701,7 +718,7 @@ class DuckDBStore:
             return None
         sql = f"SELECT MAX(trade_date) FROM {table_name}"
         if ts_code:
-            sql += f" WHERE ts_code = ?"
+            sql += " WHERE ts_code = ?"
             result = self.conn.execute(sql, [ts_code]).fetchone()
         else:
             result = self.conn.execute(sql).fetchone()
@@ -713,7 +730,7 @@ class DuckDBStore:
             return None
         sql = f"SELECT MIN(trade_date) FROM {table_name}"
         if ts_code:
-            sql += f" WHERE ts_code = ?"
+            sql += " WHERE ts_code = ?"
             result = self.conn.execute(sql, [ts_code]).fetchone()
         else:
             result = self.conn.execute(sql).fetchone()

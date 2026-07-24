@@ -739,6 +739,51 @@ async def broker_rank(
     return records
 
 
+# ---------------------------------------------------------------------------
+# 同花顺概念/行业
+# ---------------------------------------------------------------------------
+
+
+@router.get("/ths_index")
+async def ths_index(
+    ts_code: str | None = Query(None, description="股票代码"),
+    index_name: str | None = Query(None, description="概念/行业名称（模糊匹配）"),
+    index_type: str | None = Query(None, description="N=概念, I=行业, R=地域"),
+    limit: int = Query(500),
+):
+    """获取同花顺概念/行业成分股."""
+    conditions: list[str] = []
+    params: list[Any] = []
+    if ts_code:
+        conditions.append("ts_code = ?")
+        params.append(ts_code)
+    if index_name:
+        conditions.append("index_name LIKE ?")
+        params.append(f"%{index_name}%")
+    if index_type:
+        conditions.append("index_type = ?")
+        params.append(index_type)
+    where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+    sql = f"SELECT * FROM ths_index{where} LIMIT {limit}"
+    try:
+        df = _query(sql, params)
+    except Exception:
+        return []
+    return _df_to_records(df)
+
+
+@router.get("/ths_index/concepts")
+async def ths_concepts(
+    ts_code: str = Query(..., description="股票代码"),
+):
+    """获取某只股票的所有概念标签."""
+    df = _query(
+        "SELECT index_name FROM ths_index WHERE ts_code = ? ORDER BY index_name",
+        [ts_code],
+    )
+    return [str(r["index_name"]) for _, r in df.iterrows()] if not df.empty else []
+
+
 @router.get("/broker_recommend/broker_history")
 async def broker_history(
     broker: str = Query(..., description="券商名称"),

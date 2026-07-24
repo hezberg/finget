@@ -18,7 +18,6 @@ from typing import Any
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, field_validator
 
-
 # ---------------------------------------------------------------------------
 # .env 加载
 # ---------------------------------------------------------------------------
@@ -152,6 +151,8 @@ DEFAULT_DATASETS: list[DatasetConfig] = [
     DatasetConfig(name="stk_surv", type="stk_surv", api_name="stk_surv", params={}),
     # 港美股基础信息（港股 hk_basic + 美股 us_basic 合并写入）
     DatasetConfig(name="hk_us_basic", type="hk_us_basic", api_name="hk_us_basic", params={}),
+    # 同花顺概念/行业成分股（合并 ths_index + ths_sector + ths_member 三个 API）
+    DatasetConfig(name="ths_index", type="ths_index", api_name="ths_index", params={}),
 ]
 
 

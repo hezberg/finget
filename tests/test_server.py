@@ -352,3 +352,16 @@ class TestBrokerDeepAPI:
         data = resp.json()
         assert "returns" in data
         assert len(data["returns"]) == 3
+
+class TestTHSIndexAPI:
+    """同花顺概念/行业 API."""
+
+    def test_ths_index_all(self, client):
+        resp = client.get("/api/ths_index")
+        assert resp.status_code == 200
+        assert isinstance(resp.json(), list)
+
+    def test_ths_index_by_stock(self, client):
+        resp = client.get("/api/ths_index?ts_code=000001.SZ")
+        assert resp.status_code == 200
+        assert isinstance(resp.json(), list)

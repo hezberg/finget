@@ -31,9 +31,9 @@ class TestConfigDefaults:
 
     def test_default_datasets_count(self):
         """默认应有 11 个数据集."""
-        assert len(DEFAULT_DATASETS) == 11
+        assert len(DEFAULT_DATASETS) == 12
         names = {d.name for d in DEFAULT_DATASETS}
-        assert names == {"stock_basic", "daily", "weekly", "adj_factor", "daily_basic", "trade_cal", "report_rc", "stk_factor_pro", "broker_recommend", "stk_surv", "hk_us_basic"}
+        assert names == {"stock_basic", "daily", "weekly", "adj_factor", "daily_basic", "trade_cal", "report_rc", "stk_factor_pro", "broker_recommend", "stk_surv", "hk_us_basic", "ths_index"}
 
     def test_tushare_defaults(self):
         tc = TushareConfig(token="test")
@@ -98,9 +98,9 @@ class TestLoadConfig:
         """不指定 datasets 时用默认 11 个数据集."""
         monkeypatch.setenv("TUSHARE_TOKEN", "test")
         cfg = load_config()
-        assert len(cfg.datasets) == 11
+        assert len(cfg.datasets) == 12
         assert {d.name for d in cfg.datasets} == {
-            "stock_basic", "daily", "weekly", "adj_factor", "daily_basic", "trade_cal", "report_rc", "stk_factor_pro", "broker_recommend", "stk_surv", "hk_us_basic"
+            "stock_basic", "daily", "weekly", "adj_factor", "daily_basic", "trade_cal", "report_rc", "stk_factor_pro", "broker_recommend", "stk_surv", "hk_us_basic", "ths_index"
         }
 
     def test_load_config_old_yaml_path_ignored(self, monkeypatch, tmp_path):

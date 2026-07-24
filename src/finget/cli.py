@@ -16,11 +16,9 @@ from __future__ import annotations
 import os
 import sys
 import time
-from datetime import date, datetime
-from pathlib import Path
+from datetime import datetime
 
 import click
-import pandas as pd
 from rich.console import Console
 from rich.table import Table
 
@@ -73,7 +71,7 @@ def _get_cfg_or_exit() -> Config:
 AVAILABLE_DATASETS = [
     "stock_basic", "daily", "weekly", "adj_factor", "daily_basic",
     "trade_cal", "report_rc", "stk_factor_pro", "broker_recommend", "stk_surv",
-    "hk_us_basic",
+    "hk_us_basic", "ths_index",
 ]
 
 DATASET_DESCRIPTIONS = {
@@ -88,6 +86,7 @@ DATASET_DESCRIPTIONS = {
     "broker_recommend": "券商月度金股（按月并发拉取）",
     "stk_surv": "机构调研记录（逐标的拉取，content 拆详情表）",
     "hk_us_basic": "港美股基础信息（港股+美股合并，一次性全量）",
+    "ths_index": "同花顺概念/行业成分股（合并多API，一次性全量）",
 }
 
 
@@ -167,7 +166,7 @@ def init(
     # --schema-only: 只建表，跳过所有拉取，不需要 token
     # 用轻量配置（只读 db_path），绕过 load_config 的 token 强制校验
     if schema_only:
-        from finget.config import StorageConfig, _PROJECT_ROOT
+        from finget.config import _PROJECT_ROOT, StorageConfig
         db_path = os.environ.get("FINGET_DB_PATH", "data/finget.duckdb")
         # 相对路径基于项目根目录解析（与 config.py 一致）
         if not os.path.isabs(db_path):
@@ -188,9 +187,9 @@ def init(
         console.print("[red]不能同时跳过 stock_basic 和 trade_cal（如只需建表请用 --schema-only）[/red]")
         sys.exit(1)
 
+    from finget.fetchers.progress import create_progress
     from finget.fetchers.tushare_fetcher import TushareFetcher
     from finget.updater.strategies import UpdateStrategy
-    from finget.fetchers.progress import create_progress
 
     if cfg.fetcher.tushare is None:
         console.print("[red]No tushare config found.[/red]")
@@ -430,7 +429,7 @@ def fetch(
         available = ", ".join(AVAILABLE_DATASETS)
         console.print(f"[red]未知数据集 '{dataset_name}'[/red]")
         console.print(f"[dim]可用数据集: {available}[/dim]")
-        console.print(f"[dim]或使用 [bold]finget fetch latest[/bold] 按策略配置更新[/dim]")
+        console.print("[dim]或使用 [bold]finget fetch latest[/bold] 按策略配置更新[/dim]")
         sys.exit(1)
 
     # 默认日期：不传 start_date 时透传 None 给底层。
@@ -712,7 +711,7 @@ def serve(host: str, port: int, reload: bool) -> None:
     """
     import uvicorn
 
-    console.print(f"[bold cyan]🚀 finget Dashboard 启动中...[/bold cyan]")
+    console.print("[bold cyan]🚀 finget Dashboard 启动中...[/bold cyan]")
     console.print(f"   地址: [cyan]http://{host}:{port}[/cyan]")
     console.print(f"   仪表盘: [dim]http://{host}:{port}/[/dim]")
     console.print(f"   K线分析: [dim]http://{host}:{port}/kline[/dim]")

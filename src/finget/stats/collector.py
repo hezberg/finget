@@ -9,7 +9,6 @@ import pandas as pd
 from rich.console import Console
 from rich.table import Table
 
-from finget.logging import log
 from finget.storage.duckdb_store import TIME_SERIES_DATASETS, DuckDBStore
 
 # 研报类数据集（有 ts_code + report_date，需统计日期范围但日期列名不同）
