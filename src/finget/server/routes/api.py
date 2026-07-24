@@ -737,3 +737,268 @@ async def broker_rank(
         except Exception:
             r["avg_return"] = None
     return records
+
+
+@router.get("/broker_recommend/broker_history")
+async def broker_history(
+    broker: str = Query(..., description="券商名称"),
+    limit: int = Query(12, description="返回最近 N 个月"),
+):
+    """券商历史命中率 — 过去 N 个月每月的推荐次数、上涨比例、平均收益."""
+    months_df = _query(
+        "SELECT DISTINCT month FROM broker_recommend WHERE broker = ? "
+        "ORDER BY month DESC LIMIT ?",
+        [broker, limit],
+    )
+    if months_df.empty:
+        return []
+
+    results = []
+    for _, row in months_df.iterrows():
+        m = str(row["month"])
+        ms = f"{m[:4]}-{m[4:6]}-01"
+        y, mi = int(m[:4]), int(m[4:6])
+        ns = f"{y}-{mi + 1:02d}-01" if mi < 12 else f"{y + 1}-01-01"
+
+        try:
+            perf = _query(
+                "SELECT COUNT(*) AS total, "
+                "SUM(CASE WHEN (l.close - f.close) > 0 THEN 1 ELSE 0 END) AS up_cnt, "
+                "AVG((l.close - f.close) / NULLIF(f.close, 0) * 100) AS avg_r "
+                "FROM broker_recommend br "
+                "JOIN (SELECT ts_code, close FROM daily WHERE (ts_code, trade_date) IN ("
+                "  SELECT ts_code, MIN(trade_date) FROM daily "
+                "  WHERE trade_date >= ? GROUP BY ts_code)) f ON br.ts_code = f.ts_code "
+                "JOIN (SELECT ts_code, close FROM daily WHERE (ts_code, trade_date) IN ("
+                "  SELECT ts_code, MAX(trade_date) FROM daily "
+                "  WHERE trade_date < ? GROUP BY ts_code)) l ON br.ts_code = l.ts_code "
+                "WHERE br.broker = ? AND br.month = ?",
+                [ms, ns, broker, m],
+            )
+            if not perf.empty:
+                r = perf.iloc[0]
+                results.append({
+                    "month": m,
+                    "total": int(r["total"]),
+                    "up_cnt": int(r["up_cnt"]) if r["up_cnt"] is not None else 0,
+                    "hit_rate": round(int(r["up_cnt"]) / int(r["total"]) * 100, 1) if r["total"] and r["up_cnt"] is not None and int(r["total"]) > 0 else None,
+                    "avg_return": round(float(r["avg_r"]), 2) if r["avg_r"] is not None else None,
+                })
+        except Exception:
+            pass
+    return results
+
+
+@router.get("/broker_recommend/broker_profile")
+async def broker_profile(
+    broker: str = Query(..., description="券商名称"),
+    month: str = Query(..., description="月份 YYYYMM"),
+):
+    """券商画像 — 集中度、行业偏好、重复推荐率."""
+    # 该月推荐
+    recs = _query(
+        "SELECT br.ts_code, br.name, sb.industry, sb.area "
+        "FROM broker_recommend br "
+        "LEFT JOIN stock_basic sb ON br.ts_code = sb.ts_code "
+        "WHERE br.broker = ? AND br.month = ?",
+        [broker, month],
+    )
+    if recs.empty:
+        return {"error": "无推荐数据"}
+
+    total = len(recs)
+
+    # 集中度：每只股票被推荐次数排行
+    stock_cnt = recs.groupby("ts_code").size().sort_values(ascending=False)
+    top3_ratio = round(stock_cnt.head(3).sum() / total * 100, 1) if total > 0 else 0
+
+    # 行业偏好
+    industry_dist = recs["industry"].value_counts().head(5).to_dict()
+    industry_dist = {k: int(v) for k, v in industry_dist.items() if k and str(k) != "nan"}
+
+    # 重复率：本月推荐的票中，之前也被该券商推荐过的比例
+    repeated = 0
+    for _, r in recs.iterrows():
+        prev = _query(
+            "SELECT COUNT(*) FROM broker_recommend WHERE broker = ? AND ts_code = ? AND month < ?",
+            [broker, r["ts_code"], month],
+        )
+        if not prev.empty and int(prev.iloc[0, 0]) > 0:
+            repeated += 1
+
+    repeat_rate = round(repeated / total * 100, 1) if total > 0 else 0
+
+    return {
+        "broker": broker,
+        "month": month,
+        "total": total,
+        "unique_stocks": len(stock_cnt),
+        "top3_ratio": top3_ratio,
+        "repeat_rate": repeat_rate,
+        "industry_dist": industry_dist,
+    }
+
+
+@router.get("/broker_recommend/benchmark")
+async def broker_benchmark(
+    month: str = Query(..., description="月份 YYYYMM"),
+):
+    """基准对比 — 券商推荐 vs 沪深300 同期收益."""
+    ms = f"{month[:4]}-{month[4:6]}-01"
+    y, mi = int(month[:4]), int(month[4:6])
+    ns = f"{y}-{mi + 1:02d}-01" if mi < 12 else f"{y + 1}-01-01"
+
+    # 沪深300 月收益
+    bench_return = None
+    try:
+        bf = _query(
+            "SELECT close FROM daily WHERE ts_code = '000300.SH' AND trade_date >= ? "
+            "ORDER BY trade_date ASC LIMIT 1", [ms]
+        )
+        bl = _query(
+            "SELECT close FROM daily WHERE ts_code = '000300.SH' AND trade_date < ? "
+            "ORDER BY trade_date DESC LIMIT 1", [ns]
+        )
+        if not bf.empty and not bl.empty:
+            bench_return = round((float(bl.iloc[0, 0]) - float(bf.iloc[0, 0])) / float(bf.iloc[0, 0]) * 100, 2)
+    except Exception:
+        pass
+
+    # 各券商超额收益
+    brokers = _query(
+        "SELECT broker FROM broker_recommend WHERE month = ? GROUP BY broker", [month]
+    )
+    results = []
+    for _, row in brokers.iterrows():
+        bn = row["broker"]
+        try:
+            perf = _query(
+                "SELECT AVG((l.close - f.close) / NULLIF(f.close, 0) * 100) AS avg_r "
+                "FROM broker_recommend br "
+                "JOIN (SELECT ts_code, close FROM daily WHERE (ts_code, trade_date) IN ("
+                "  SELECT ts_code, MIN(trade_date) FROM daily "
+                "  WHERE trade_date >= ? GROUP BY ts_code)) f ON br.ts_code = f.ts_code "
+                "JOIN (SELECT ts_code, close FROM daily WHERE (ts_code, trade_date) IN ("
+                "  SELECT ts_code, MAX(trade_date) FROM daily "
+                "  WHERE trade_date < ? GROUP BY ts_code)) l ON br.ts_code = l.ts_code "
+                "WHERE br.broker = ? AND br.month = ?",
+                [ms, ns, bn, month],
+            )
+            avg_r = round(float(perf.iloc[0, 0]), 2) if not perf.empty and perf.iloc[0, 0] is not None else None
+            excess = round(avg_r - bench_return, 2) if avg_r is not None and bench_return is not None else None
+            results.append({
+                "broker": bn,
+                "avg_return": avg_r,
+                "benchmark_return": bench_return,
+                "excess_return": excess,
+            })
+        except Exception:
+            results.append({"broker": bn, "avg_return": None, "benchmark_return": bench_return, "excess_return": None})
+
+    results.sort(key=lambda x: x["excess_return"] if x["excess_return"] is not None else -999, reverse=True)
+    return {"benchmark": "沪深300", "benchmark_return": bench_return, "brokers": results}
+
+
+@router.get("/broker_recommend/consensus")
+async def broker_consensus(
+    month: str = Query(..., description="月份 YYYYMM"),
+):
+    """共识效应 — 被越多券商推荐，收益越高吗？"""
+    ms = f"{month[:4]}-{month[4:6]}-01"
+    y, mi = int(month[:4]), int(month[4:6])
+    ns = f"{y}-{mi + 1:02d}-01" if mi < 12 else f"{y + 1}-01-01"
+
+    df = _query(
+        "SELECT br.ts_code, br.name, COUNT(DISTINCT br.broker) AS broker_cnt, "
+        "AVG((l.close - f.close) / NULLIF(f.close, 0) * 100) AS avg_return, "
+        "COUNT(*) AS total_rec "
+        "FROM broker_recommend br "
+        "JOIN (SELECT ts_code, close FROM daily WHERE (ts_code, trade_date) IN ("
+        "  SELECT ts_code, MIN(trade_date) FROM daily "
+        "  WHERE trade_date >= ? GROUP BY ts_code)) f ON br.ts_code = f.ts_code "
+        "JOIN (SELECT ts_code, close FROM daily WHERE (ts_code, trade_date) IN ("
+        "  SELECT ts_code, MAX(trade_date) FROM daily "
+        "  WHERE trade_date < ? GROUP BY ts_code)) l ON br.ts_code = l.ts_code "
+        "WHERE br.month = ? "
+        "GROUP BY br.ts_code, br.name ORDER BY broker_cnt DESC",
+        [ms, ns, month],
+    )
+    if df.empty:
+        return []
+
+    records = _df_to_records(df)
+
+    # 按券商数分组统计
+    groups = {"1家独推": [], "2-3家": [], "5家以上共识": []}
+    for r in records:
+        cnt = r.get("broker_cnt", 0)
+        ret = r.get("avg_return")
+        if cnt == 1:
+            groups["1家独推"].append(ret)
+        elif cnt <= 4:
+            groups["2-3家"].append(ret)
+        else:
+            groups["5家以上共识"].append(ret)
+
+    result = []
+    for label, returns in groups.items():
+        valid = [x for x in returns if x is not None]
+        result.append({
+            "group": label,
+            "count": len(returns),
+            "avg_return": round(sum(valid) / len(valid), 2) if valid else None,
+        })
+
+    # 散点数据
+    scatter = [{"broker_cnt": r["broker_cnt"], "avg_return": r["avg_return"],
+                 "ts_code": r["ts_code"], "name": r.get("name", "")} for r in records]
+
+    return {"groups": result, "scatter": scatter}
+
+
+@router.get("/broker_recommend/lagged")
+async def broker_lagged(
+    ts_code: str = Query(..., description="股票代码"),
+    month: str = Query(..., description="推荐月份 YYYYMM"),
+):
+    """滞后表现 — 推荐后 1/3/6 个月收益."""
+    ms = f"{month[:4]}-{month[4:6]}-01"
+    y, mi = int(month[:4]), int(month[4:6])
+
+    def _next_month(ym: tuple[int, int], offset: int) -> str:
+        ny, nm = ym[0], ym[1] + offset
+        while nm > 12:
+            ny += 1
+            nm -= 12
+        return f"{ny}-{nm:02d}-01"
+
+    cuts = [
+        ("1个月", _next_month((y, mi), 1)),
+        ("3个月", _next_month((y, mi), 3)),
+        ("6个月", _next_month((y, mi), 6)),
+    ]
+
+    try:
+        first = _query(
+            "SELECT close FROM daily WHERE ts_code = ? AND trade_date >= ? "
+            "ORDER BY trade_date ASC LIMIT 1", [ts_code, ms]
+        )
+        if first.empty:
+            return {"error": "无数据"}
+        fc = float(first.iloc[0, 0])
+
+        result = {"ts_code": ts_code, "month": month, "first_close": round(fc, 2), "returns": []}
+        for label, cutoff in cuts:
+            ldf = _query(
+                "SELECT close FROM daily WHERE ts_code = ? AND trade_date < ? "
+                "ORDER BY trade_date DESC LIMIT 1", [ts_code, cutoff]
+            )
+            if not ldf.empty:
+                lc = float(ldf.iloc[0, 0])
+                ret = round((lc - fc) / fc * 100, 2)
+            else:
+                ret = None
+            result["returns"].append({"period": label, "return": ret})
+        return result
+    except Exception as e:
+        return {"error": str(e)}

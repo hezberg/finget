@@ -318,3 +318,37 @@ class TestBrokerAPI:
         data = resp.json()
         assert isinstance(data, list)
         assert len(data) >= 1
+
+class TestBrokerDeepAPI:
+    """券商深度分析 API."""
+
+    def test_broker_history(self, client):
+        resp = client.get("/api/broker_recommend/broker_history?broker=中信证券&limit=6")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+
+    def test_broker_profile(self, client):
+        resp = client.get("/api/broker_recommend/broker_profile?broker=中信证券&month=202401")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "total" in data
+
+    def test_benchmark(self, client):
+        resp = client.get("/api/broker_recommend/benchmark?month=202401")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "brokers" in data
+
+    def test_consensus(self, client):
+        resp = client.get("/api/broker_recommend/consensus?month=202401")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "scatter" in data
+
+    def test_lagged(self, client):
+        resp = client.get("/api/broker_recommend/lagged?ts_code=000001.SZ&month=202401")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "returns" in data
+        assert len(data["returns"]) == 3
