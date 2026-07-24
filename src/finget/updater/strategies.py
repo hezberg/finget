@@ -320,8 +320,12 @@ class UpdateStrategy:
 
         if member_frames:
             members = pd.concat(member_frames, ignore_index=True)
+            # 选择存在的列
+            cols = ["index_code", "ts_code"]
+            if "name" in members.columns:
+                cols.append("name")
             merged = daily.merge(
-                members[["index_code", "ts_code", "name"]],
+                members[cols],
                 on="index_code",
                 how="inner",
             )
