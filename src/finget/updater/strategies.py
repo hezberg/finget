@@ -315,11 +315,13 @@ class UpdateStrategy:
                 page_size=page_size,
             )
             if not member_df.empty:
-                # ths_member 列: ts_code, name(股票名), con_code, con_name(概念名)
+                # ths_member 列：ts_code=概念代码, con_code=股票代码, con_name=概念名称
+                # 需要互换 ts_code ↔ con_code
                 member_df["src"] = "member"
                 member_df = member_df.rename(columns={
-                    "con_code": "index_code",
-                    "con_name": "index_name",
+                    "ts_code": "index_code",   # 概念代码 → index_code
+                    "con_code": "ts_code",     # 股票代码 → ts_code
+                    "con_name": "index_name",  # 概念名称 → index_name
                 })
                 member_rows.append(member_df)
                 log.info(f"{dataset.name}: ths_member fetched {len(member_df)} rows")
