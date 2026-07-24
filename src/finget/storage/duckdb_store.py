@@ -437,15 +437,23 @@ SCHEMAS: dict[str, str] = {
             enname    VARCHAR
         )
     """,
-    # 同花顺概念/行业成分股（ths_index + ths_sector + ths_member 三 API 合并）
+    # 同花顺概念/行业成分股（ths_index + ths_daily + ths_member 三 API 合并）
     "ths_index": """
         CREATE TABLE IF NOT EXISTS {table} (
-            ts_code     VARCHAR,
-            name        VARCHAR,
             index_code  VARCHAR,
             index_name  VARCHAR,
             index_type  VARCHAR,
-            src         VARCHAR
+            trade_date  DATE,
+            open        DOUBLE,
+            high        DOUBLE,
+            low         DOUBLE,
+            close       DOUBLE,
+            pre_close   DOUBLE,
+            pct_chg     DOUBLE,
+            vol         DOUBLE,
+            amount      DOUBLE,
+            ts_code     VARCHAR,
+            name        VARCHAR
         )
     """,
 }
@@ -464,8 +472,8 @@ _CONFLICT_KEYS: dict[str, list[str]] = {
     "stk_surv_detail": ["ts_code", "surv_date", "rece_org"],
     # hk_us_basic: 港股和美股 ts_code 后缀不同（.HK/.US），不会冲突
     "hk_us_basic": ["ts_code"],
-    # ths_index: 同一股票在同一概念/行业中只出现一次
-    "ths_index": ["ts_code", "index_code"],
+    # ths_index: (概念代码, 日期, 成分股) 三元组唯一
+    "ths_index": ["index_code", "trade_date", "ts_code"],
 }
 
 # 时序数据集（含 trade_date），用于增量/补漏判断

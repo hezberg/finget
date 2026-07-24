@@ -746,25 +746,33 @@ async def broker_rank(
 
 @router.get("/ths_index")
 async def ths_index(
-    ts_code: str | None = Query(None, description="股票代码"),
-    index_name: str | None = Query(None, description="概念/行业名称（模糊匹配）"),
-    index_type: str | None = Query(None, description="N=概念, I=行业, R=地域"),
+    index_code: str | None = Query(None, description="概念代码"),
+    ts_code: str | None = Query(None, description="成分股代码"),
+    index_name: str | None = Query(None, description="概念名称（模糊匹配）"),
+    start: str | None = Query(None, description="起始日期"),
+    end: str | None = Query(None, description="结束日期"),
     limit: int = Query(500),
 ):
-    """获取同花顺概念/行业成分股."""
+    """获取同花顺概念板块数据（含日线OHLCV + 成分股）."""
     conditions: list[str] = []
     params: list[Any] = []
+    if index_code:
+        conditions.append("index_code = ?")
+        params.append(index_code)
     if ts_code:
         conditions.append("ts_code = ?")
         params.append(ts_code)
     if index_name:
         conditions.append("index_name LIKE ?")
         params.append(f"%{index_name}%")
-    if index_type:
-        conditions.append("index_type = ?")
-        params.append(index_type)
+    if start:
+        conditions.append("trade_date >= ?")
+        params.append(_norm_date(start))
+    if end:
+        conditions.append("trade_date <= ?")
+        params.append(_norm_date(end))
     where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
-    sql = f"SELECT * FROM ths_index{where} LIMIT {limit}"
+    sql = f"SELECT * FROM ths_index{where} ORDER BY trade_date DESC, index_code, ts_code LIMIT {limit}"
     try:
         df = _query(sql, params)
     except Exception:
@@ -776,12 +784,42 @@ async def ths_index(
 async def ths_concepts(
     ts_code: str = Query(..., description="股票代码"),
 ):
-    """获取某只股票的所有概念标签."""
+    """获取某只股票所属的所有概念."""
     df = _query(
-        "SELECT index_name FROM ths_index WHERE ts_code = ? ORDER BY index_name",
+        "SELECT DISTINCT index_code, index_name FROM ths_index "
+        "WHERE ts_code = ? AND index_name IS NOT NULL ORDER BY index_name",
         [ts_code],
     )
-    return [str(r["index_name"]) for _, r in df.iterrows()] if not df.empty else []
+    return _df_to_records(df) if not df.empty else []
+
+
+@router.get("/ths_index/daily")
+async def ths_index_daily(
+    index_code: str = Query(..., description="概念代码"),
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+    limit: int = Query(500),
+):
+    """获取某个概念的日线行情（去重，不含成分股展开）."""
+    conditions = ["index_code = ?"]
+    params: list[Any] = [index_code]
+    if start:
+        conditions.append("trade_date >= ?")
+        params.append(_norm_date(start))
+    if end:
+        conditions.append("trade_date <= ?")
+        params.append(_norm_date(end))
+    where = f" WHERE {' AND '.join(conditions)}"
+    sql = (
+        f"SELECT DISTINCT index_code, index_name, index_type, trade_date, "
+        f"open, high, low, close, pre_close, pct_chg, vol, amount "
+        f"FROM ths_index{where} ORDER BY trade_date ASC LIMIT {limit}"
+    )
+    try:
+        df = _query(sql, params)
+    except Exception:
+        return []
+    return _df_to_records(df)
 
 
 @router.get("/broker_recommend/broker_history")

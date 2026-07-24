@@ -253,119 +253,97 @@ class UpdateStrategy:
     # ------------------------------------------------------------------
 
     def _update_ths_index(self, dataset: DatasetConfig) -> int:
-        """更新同花顺概念/行业成分股.
+        """更新同花顺概念板块数据.
 
         合并三个 tushare API：
-        1. ths_index (doc 259) — 概念板块分类（code, name, type）
-        2. ths_sector (doc 260) — 行业板块分类
-        3. ths_member (doc 261) — 概念板块成分股（ts_code, name → concept_code）
+        1. ths_index (259) — 概念分类列表 (code, name, type)
+        2. ths_daily (260) — 概念日线行情 (ts_code, trade_date, OHLCV)
+        3. ths_member (261) — 成分股映射 (ts_code→概念代码, con_code→股票代码)
 
-        最终合并为一张表 (ts_code, name, index_code, index_name, index_type, src).
-        每个 (ts_code, index_code) 唯一。
+        最终: (index_code, index_name, index_type, trade_date, OHLCV, ts_code, name)
+        每个 (index_code, trade_date, ts_code) 唯一。
         """
         page_size = 5000
-        frames: list[pd.DataFrame] = []
 
-        # --- 1. ths_index：概念分类 ---
+        # --- 1. ths_index：概念分类元数据 ---
+        index_map: dict[str, dict[str, str]] = {}
         try:
-            idx_df = self.fetcher.fetch_all(
-                api_name="ths_index",
-                params={},
-                page_size=page_size,
-            )
+            idx_df = self.fetcher.fetch_all("ths_index", {}, page_size=page_size)
             if not idx_df.empty:
-                idx_df["src"] = "index"
-                # 适配列名: code→index_code, name→index_name, type→index_type
-                idx_df = idx_df.rename(columns={
-                    "code": "index_code",
-                    "name": "index_name",
-                    "type": "index_type",
-                })
-                # ths_index 没有 ts_code（它只是分类列表），暂时留空
-                frames.append(idx_df)
-                log.info(f"{dataset.name}: ths_index fetched {len(idx_df)} concepts")
+                for _, r in idx_df.iterrows():
+                    code = str(r.get("code", r.get("ts_code", "")))
+                    index_map[code] = {
+                        "index_name": str(r.get("name", "")),
+                        "index_type": str(r.get("type", "")),
+                    }
+                log.info(f"{dataset.name}: ths_index fetched {len(index_map)} concepts")
         except Exception as e:
             log.warning(f"{dataset.name}: ths_index failed: {e}")
 
-        # --- 2. ths_sector：行业分类（结构与 ths_index 类似） ---
+        # --- 2. ths_daily：概念日线行情 ---
+        daily_frames: list[pd.DataFrame] = []
         try:
-            sec_df = self.fetcher.fetch_all(
-                api_name="ths_sector",
-                params={},
-                page_size=page_size,
-            )
-            if not sec_df.empty:
-                sec_df["src"] = "sector"
-                sec_df = sec_df.rename(columns={
-                    "code": "index_code",
-                    "name": "index_name",
-                    "type": "index_type",
+            daily_df = self.fetcher.fetch_all("ths_daily", {}, page_size=page_size)
+            if not daily_df.empty:
+                daily_df = daily_df.rename(columns={
+                    "ts_code": "index_code",
+                    "pct_change": "pct_chg",
                 })
-                frames.append(sec_df)
-                log.info(f"{dataset.name}: ths_sector fetched {len(sec_df)} sectors")
+                if "trade_date" in daily_df.columns:
+                    daily_df["trade_date"] = pd.to_datetime(
+                        daily_df["trade_date"], format="%Y%m%d"
+                    ).dt.date
+                daily_frames.append(daily_df)
+                log.info(f"{dataset.name}: ths_daily fetched {len(daily_df)} rows")
         except Exception as e:
-            log.warning(f"{dataset.name}: ths_sector failed: {e}")
+            log.warning(f"{dataset.name}: ths_daily failed: {e}")
 
         # --- 3. ths_member：成分股映射 ---
-        member_rows: list[pd.DataFrame] = []
+        member_frames: list[pd.DataFrame] = []
         try:
-            member_df = self.fetcher.fetch_all(
-                api_name="ths_member",
-                params={},
-                page_size=page_size,
-            )
+            member_df = self.fetcher.fetch_all("ths_member", {}, page_size=page_size)
             if not member_df.empty:
-                # ths_member 列：ts_code=概念代码, con_code=股票代码, con_name=概念名称
-                # 需要互换 ts_code ↔ con_code
-                member_df["src"] = "member"
                 member_df = member_df.rename(columns={
-                    "ts_code": "index_code",   # 概念代码 → index_code
-                    "con_code": "ts_code",     # 股票代码 → ts_code
-                    "con_name": "index_name",  # 概念名称 → index_name
+                    "ts_code": "index_code",
+                    "con_code": "ts_code",
                 })
-                member_rows.append(member_df)
+                member_frames.append(member_df)
                 log.info(f"{dataset.name}: ths_member fetched {len(member_df)} rows")
         except Exception as e:
             log.warning(f"{dataset.name}: ths_member failed: {e}")
 
-        # --- 合并 ---
-        # 策略：从 ths_index / ths_sector 拿到所有概念/行业的 (code, name, type)
-        # 然后与 ths_member 的 (ts_code, concept_code) 做 JOIN
-        # 最终表: (ts_code, stock_name, index_code, index_name, index_type, src)
-
-        if not member_rows:
-            log.warning(f"{dataset.name}: no member data")
+        if not daily_frames:
+            log.warning(f"{dataset.name}: no daily data")
             return 0
 
-        members = pd.concat(member_rows, ignore_index=True)
+        daily = pd.concat(daily_frames, ignore_index=True)
 
-        # 确保必要列存在
-        for col in ["ts_code", "index_code"]:
-            if col not in members.columns:
-                log.warning(f"{dataset.name}: missing column '{col}' in member data")
-                return 0
+        if member_frames:
+            members = pd.concat(member_frames, ignore_index=True)
+            merged = daily.merge(
+                members[["index_code", "ts_code", "name"]],
+                on="index_code",
+                how="inner",
+            )
+        else:
+            merged = daily
+            if "ts_code" not in merged.columns:
+                merged["ts_code"] = None
+            if "name" not in merged.columns:
+                merged["name"] = None
 
-        # 如果 member 没有 index_name（con_name 已重命名），尝试从分类 lookup 补全
-        if frames and "index_name" not in members.columns:
-            lookup = pd.concat(frames, ignore_index=True)
-            if "index_code" in lookup.columns and "index_name" in lookup.columns:
-                members = members.merge(
-                    lookup[["index_code", "index_name", "index_type"]],
-                    on="index_code", how="left", suffixes=("", "_cls"),
-                )
-                # 用分类表的 index_name 补全
-                if "index_name_cls" in members.columns:
-                    members["index_name"] = members["index_name"].fillna(members["index_name_cls"]) if "index_name" in members.columns else members["index_name_cls"]
-                    members = members.drop(columns=["index_name_cls"])
-                if "index_type_cls" in members.columns:
-                    members["index_type"] = members["index_type"].fillna(members["index_type_cls"]) if "index_type" in members.columns else members["index_type_cls"]
-                    members = members.drop(columns=["index_type_cls"])
+        # 补全概念名称/类型
+        if index_map:
+            merged["index_name"] = merged["index_code"].map(
+                lambda c: index_map.get(str(c), {}).get("index_name", "")
+            )
+            merged["index_type"] = merged["index_code"].map(
+                lambda c: index_map.get(str(c), {}).get("index_type", "")
+            )
 
-        # 确保 src 列
-        if "src" not in members.columns:
-            members["src"] = "member"
-
-        n = self.store.upsert(dataset.name, members, conflict_keys=["ts_code", "index_code"])
+        n = self.store.upsert(
+            dataset.name, merged, conflict_keys=["index_code", "trade_date", "ts_code"]
+        )
         log.info(f"{dataset.name}: upserted {n} rows")
         return n
 

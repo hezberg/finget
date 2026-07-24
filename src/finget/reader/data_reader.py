@@ -297,39 +297,48 @@ class DataReader:
 
     def get_ths_index(
         self,
+        index_code: str | None = None,
         ts_code: str | None = None,
         index_name: str | None = None,
-        index_type: str | None = None,
+        start_date: str | date | None = None,
+        end_date: str | date | None = None,
     ) -> pd.DataFrame:
-        """获取同花顺概念/行业成分股.
+        """获取同花顺概念板块数据（含日线OHLCV + 成分股）.
 
         Args:
-            ts_code: 股票代码; None 则全部.
-            index_name: 概念/行业名称（模糊匹配）; None 则全部.
-            index_type: N=概念, I=行业, R=地域; None 则全部.
-
-        Returns:
-            DataFrame, 按 index_name, ts_code 排序.
+            index_code: 概念代码; None 则全部.
+            ts_code: 成分股代码; None 则全部.
+            index_name: 概念名称（模糊匹配）; None 则全部.
+            start_date/end_date: 日期范围.
         """
         conditions: list[str] = []
         params: list[Any] = []
+        if index_code:
+            conditions.append("index_code = ?")
+            params.append(index_code)
         if ts_code:
             conditions.append("ts_code = ?")
             params.append(ts_code)
         if index_name:
             conditions.append("index_name LIKE ?")
             params.append(f"%{index_name}%")
-        if index_type:
-            conditions.append("index_type = ?")
-            params.append(index_type)
+        if start_date is not None:
+            conditions.append("trade_date >= ?")
+            params.append(self._to_date(start_date))
+        if end_date is not None:
+            conditions.append("trade_date <= ?")
+            params.append(self._to_date(end_date))
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
-        sql = f"SELECT * FROM ths_index{where} ORDER BY index_name, ts_code;"
+        sql = f"SELECT * FROM ths_index{where} ORDER BY trade_date DESC, index_code, ts_code;"
         return self.store.query(sql, params)
 
     def get_ths_concepts(self, ts_code: str) -> list[str]:
-        """获取某只股票所属的概念/行业列表."""
+        """获取某只股票所属的概念名称列表."""
         df = self.get_ths_index(ts_code=ts_code)
-        return df["index_name"].tolist() if not df.empty else []
+        if df.empty:
+            return []
+        distinct = df[["index_code", "index_name"]].drop_duplicates()
+        return distinct["index_name"].tolist()
 
     # ------------------------------------------------------------------
     # 通用查询
