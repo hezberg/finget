@@ -231,7 +231,7 @@ async def kline(
     if table not in ("daily", "weekly"):
         raise HTTPException(status_code=400, detail="table 参数仅支持 daily 或 weekly")
 
-    conditions = [f"d.ts_code = ?"]
+    conditions = ["d.ts_code = ?"]
     params: list[Any] = [ts_code]
 
     if start:
@@ -589,3 +589,151 @@ async def broker_list():
     except Exception:
         return []
     return _df_to_records(df)
+
+
+@router.get("/broker_recommend/top_stocks")
+async def broker_top_stocks(
+    month: str = Query(..., description="月份 YYYYMM"),
+    limit: int = Query(15, description="返回前 N 只股票"),
+):
+    """本月热门金股 — 按推荐次数排名，附带当月涨跌幅."""
+    top = _query(
+        "SELECT ts_code, name, COUNT(*) AS rec_cnt, "
+        "COUNT(DISTINCT broker) AS broker_cnt "
+        "FROM broker_recommend WHERE month = ? "
+        "GROUP BY ts_code, name ORDER BY rec_cnt DESC LIMIT ?",
+        [month, limit],
+    )
+    if top.empty:
+        return []
+
+    records = _df_to_records(top)
+    month_start = f"{month[:4]}-{month[4:6]}-01"
+    y, m = int(month[:4]), int(month[4:6])
+    next_start = f"{y}-{m + 1:02d}-01" if m < 12 else f"{y + 1}-01-01"
+
+    for r in records:
+        code = r["ts_code"]
+        try:
+            first_df = _query(
+                "SELECT close FROM daily WHERE ts_code = ? AND trade_date >= ? "
+                "ORDER BY trade_date ASC LIMIT 1",
+                [code, month_start],
+            )
+            last_df = _query(
+                "SELECT close FROM daily WHERE ts_code = ? AND trade_date < ? "
+                "ORDER BY trade_date DESC LIMIT 1",
+                [code, next_start],
+            )
+            if not first_df.empty and not last_df.empty:
+                fc, lc = float(first_df.iloc[0, 0]), float(last_df.iloc[0, 0])
+                r["month_return"] = round((lc - fc) / fc * 100, 2)
+                r["first_close"] = round(fc, 2)
+                r["last_close"] = round(lc, 2)
+            else:
+                r["month_return"] = None
+        except Exception:
+            r["month_return"] = None
+    return records
+
+
+@router.get("/broker_recommend/stock_performance")
+async def broker_stock_performance(
+    ts_code: str = Query(..., description="股票代码"),
+    month: str = Query(..., description="推荐月份 YYYYMM"),
+):
+    """某只股票在被推荐月份及之后的表现."""
+    month_start = f"{month[:4]}-{month[4:6]}-01"
+    y, m = int(month[:4]), int(month[4:6])
+    m1_start = f"{y}-{m + 1:02d}-01" if m < 12 else f"{y + 1}-01-01"
+    m3_start = f"{y}-{m + 3:02d}-01" if m < 10 else f"{y + 1}-{m - 9:02d}-01"
+
+    try:
+        first = _query(
+            "SELECT trade_date, close FROM daily WHERE ts_code = ? AND trade_date >= ? "
+            "ORDER BY trade_date ASC LIMIT 1",
+            [ts_code, month_start],
+        )
+        if first.empty:
+            return {"error": "无交易数据"}
+
+        fc = float(first.iloc[0, 1])
+        fd = str(first.iloc[0, 0])[:10]
+
+        last = _query(
+            "SELECT close FROM daily WHERE ts_code = ? AND trade_date < ? "
+            "ORDER BY trade_date DESC LIMIT 1",
+            [ts_code, m1_start],
+        )
+        mr = round((float(last.iloc[0, 0]) - fc) / fc * 100, 2) if not last.empty else None
+
+        m3 = _query(
+            "SELECT close FROM daily WHERE ts_code = ? AND trade_date < ? "
+            "ORDER BY trade_date DESC LIMIT 1",
+            [ts_code, m3_start],
+        )
+        m3r = round((float(m3.iloc[0, 0]) - fc) / fc * 100, 2) if not m3.empty else None
+
+        brokers = _query(
+            "SELECT DISTINCT broker FROM broker_recommend WHERE ts_code = ? AND month = ?",
+            [ts_code, month],
+        )
+
+        return {
+            "ts_code": ts_code, "month": month, "first_date": fd,
+            "first_close": round(fc, 2), "month_return": mr, "m3_return": m3r,
+            "brokers": [str(b) for b in brokers["broker"].tolist()] if not brokers.empty else [],
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@router.get("/broker_recommend/broker_rank")
+async def broker_rank(
+    month: str = Query(..., description="月份 YYYYMM"),
+    limit: int = Query(20),
+):
+    """券商推荐排名 — 按推荐次数 + 平均命中率."""
+    brokers = _query(
+        "SELECT broker, COUNT(*) AS rec_cnt, COUNT(DISTINCT ts_code) AS stock_cnt "
+        "FROM broker_recommend WHERE month = ? "
+        "GROUP BY broker ORDER BY rec_cnt DESC LIMIT ?",
+        [month, limit],
+    )
+    if brokers.empty:
+        return []
+
+    records = _df_to_records(brokers)
+    month_start = f"{month[:4]}-{month[4:6]}-01"
+    y, m = int(month[:4]), int(month[4:6])
+    next_start = f"{y}-{m + 1:02d}-01" if m < 12 else f"{y + 1}-01-01"
+
+    for r in records:
+        bn = r["broker"]
+        try:
+            perf = _query(
+                "SELECT AVG((l.close - f.close) / NULLIF(f.close, 0) * 100) FROM ("
+                "  SELECT DISTINCT br.ts_code FROM broker_recommend br "
+                "  WHERE br.broker = ? AND br.month = ?"
+                ") rec "
+                "JOIN (SELECT ts_code, close, trade_date FROM daily "
+                "  WHERE (ts_code, trade_date) IN ("
+                "    SELECT ts_code, MIN(trade_date) FROM daily "
+                "    WHERE trade_date >= ? GROUP BY ts_code"
+                "  )"
+                ") f ON rec.ts_code = f.ts_code "
+                "JOIN (SELECT ts_code, close FROM daily "
+                "  WHERE (ts_code, trade_date) IN ("
+                "    SELECT ts_code, MAX(trade_date) FROM daily "
+                "    WHERE trade_date < ? GROUP BY ts_code"
+                "  )"
+                ") l ON rec.ts_code = l.ts_code",
+                [bn, month, month_start, next_start],
+            )
+            if not perf.empty and perf.iloc[0, 0] is not None:
+                r["avg_return"] = round(float(perf.iloc[0, 0]), 2)
+            else:
+                r["avg_return"] = None
+        except Exception:
+            r["avg_return"] = None
+    return records

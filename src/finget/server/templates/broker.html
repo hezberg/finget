@@ -3,58 +3,106 @@
 {% block head_extra %}
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>
 <style>
-    .heatmap-cell { font-size: 10px; }
+    .return-up { color: #ef4444; font-weight: 600; }
+    .return-down { color: #22c55e; font-weight: 600; }
+    .clickable-row { cursor: pointer; }
+    .clickable-row:hover { background-color: #334155 !important; }
+    .selected-row { background-color: #164e63 !important; border-left: 3px solid #22d3ee; }
+    .tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 10px; }
+    .tag-hot { background: #7f1d1d; color: #fca5a5; }
 </style>
 {% endblock %}
 {% block content %}
 <div class="p-4 max-w-7xl mx-auto">
-    <h1 class="text-xl font-bold mb-4">券商月度金股</h1>
+    <h1 class="text-xl font-bold mb-1">券商金股</h1>
 
-    <!-- 热力图 -->
-    <div class="card p-4 mb-4">
-        <div class="flex items-center justify-between mb-3">
-            <h2 class="text-sm font-semibold text-slate-300">推荐热力图（券商 × 月份）</h2>
-            <div class="flex gap-2">
-                <input type="text" id="start-month" placeholder="起始月 YYYYMM"
-                       class="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-100 w-28">
-                <input type="text" id="end-month" placeholder="结束月 YYYYMM"
-                       class="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-100 w-28">
-                <button id="btn-heatmap" class="bg-cyan-600 hover:bg-cyan-500 text-white text-xs px-3 py-1 rounded">
-                    刷新
-                </button>
-            </div>
-        </div>
-        <div id="chart-heatmap" style="height:500px;">
-            <div class="flex items-center justify-center h-full text-slate-500 text-sm">加载中...</div>
-        </div>
+    <!-- 月份选择 -->
+    <div class="flex items-center gap-3 mb-4">
+        <label class="text-sm text-slate-400">月份:</label>
+        <select id="select-month" class="bg-slate-800 border border-slate-600 rounded px-3 py-2 text-sm text-slate-100">
+            <option value="">加载中...</option>
+        </select>
+        <button id="btn-refresh" class="bg-cyan-600 hover:bg-cyan-500 text-white text-sm px-4 py-2 rounded font-medium">
+            查询
+        </button>
+        <span id="info-bar" class="text-xs text-slate-500 ml-4"></span>
     </div>
 
-    <!-- 详情表 -->
-    <div class="card p-4">
-        <div class="flex items-center gap-3 mb-3">
-            <h2 class="text-sm font-semibold text-slate-300">金股详情</h2>
-            <select id="filter-month" class="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-100">
-                <option value="">全部月份</option>
-            </select>
-            <input type="text" id="filter-broker" placeholder="筛选券商..."
-                   class="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-100 w-36">
-            <button id="btn-filter" class="bg-slate-600 hover:bg-slate-500 text-white text-xs px-3 py-1 rounded">
-                筛选
-            </button>
-            <span id="detail-count" class="text-xs text-slate-500 ml-auto"></span>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <!-- 左侧：本月热门金股 -->
+        <div class="card p-4">
+            <h2 class="text-sm font-semibold text-slate-300 mb-2">
+                🔥 本月热门金股
+                <span id="top-count" class="text-xs text-slate-500 font-normal ml-2"></span>
+            </h2>
+            <div class="overflow-x-auto max-h-96 scrollbar-thin" id="top-stocks-container">
+                <table class="w-full text-sm" id="top-stocks-table">
+                    <thead class="text-xs text-slate-400 uppercase bg-slate-800 sticky top-0">
+                        <tr>
+                            <th class="px-3 py-2 text-left">#</th>
+                            <th class="px-3 py-2 text-left">代码</th>
+                            <th class="px-3 py-2 text-left">名称</th>
+                            <th class="px-3 py-2 text-right">推荐次数</th>
+                            <th class="px-3 py-2 text-right">券商数</th>
+                            <th class="px-3 py-2 text-right">月收益</th>
+                        </tr>
+                    </thead>
+                    <tbody class="text-slate-300"></tbody>
+                </table>
+            </div>
+            <div id="top-loading" class="text-center text-slate-500 text-sm py-8">请选择月份后查询</div>
         </div>
-        <div class="overflow-x-auto scrollbar-thin max-h-96">
-            <table class="w-full text-sm text-left" id="detail-table">
-                <thead class="text-xs text-slate-400 uppercase bg-slate-800 sticky top-0">
-                    <tr>
-                        <th class="px-3 py-2">月份</th>
-                        <th class="px-3 py-2">券商</th>
-                        <th class="px-3 py-2">股票代码</th>
-                        <th class="px-3 py-2">股票名称</th>
-                    </tr>
-                </thead>
-                <tbody class="text-slate-300"></tbody>
-            </table>
+
+        <!-- 右侧：选中股票详情 -->
+        <div>
+            <!-- 表现卡片 -->
+            <div class="card p-4 mb-4" id="stock-detail-card">
+                <h2 class="text-sm font-semibold text-slate-300 mb-2">📈 选中股票表现</h2>
+                <div id="stock-detail-placeholder" class="text-center text-slate-500 text-sm py-8">
+                    点击左侧股票查看详情
+                </div>
+                <div id="stock-detail-content" class="hidden">
+                    <div class="text-lg font-bold text-slate-200 mb-1" id="sd-title"></div>
+                    <div class="text-xs text-slate-500 mb-2" id="sd-brokers"></div>
+                    <div class="grid grid-cols-2 gap-3 mb-3">
+                        <div class="bg-slate-800 rounded p-3 text-center">
+                            <div class="text-xs text-slate-400">月初价</div>
+                            <div class="text-lg font-bold text-slate-200" id="sd-first"></div>
+                        </div>
+                        <div class="bg-slate-800 rounded p-3 text-center">
+                            <div class="text-xs text-slate-400">月末价</div>
+                            <div class="text-lg font-bold text-slate-200" id="sd-last"></div>
+                        </div>
+                        <div class="bg-slate-800 rounded p-3 text-center">
+                            <div class="text-xs text-slate-400">当月收益</div>
+                            <div class="text-lg font-bold" id="sd-month"></div>
+                        </div>
+                        <div class="bg-slate-800 rounded p-3 text-center">
+                            <div class="text-xs text-slate-400">3个月收益</div>
+                            <div class="text-lg font-bold" id="sd-m3"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 券商排名 -->
+            <div class="card p-4">
+                <h2 class="text-sm font-semibold text-slate-300 mb-2">🏆 券商推荐排名</h2>
+                <div class="overflow-x-auto max-h-80 scrollbar-thin">
+                    <table class="w-full text-sm" id="broker-rank-table">
+                        <thead class="text-xs text-slate-400 uppercase bg-slate-800 sticky top-0">
+                            <tr>
+                                <th class="px-3 py-2 text-left">券商</th>
+                                <th class="px-3 py-2 text-right">推荐次数</th>
+                                <th class="px-3 py-2 text-right">股票数</th>
+                                <th class="px-3 py-2 text-right">平均月收益</th>
+                            </tr>
+                        </thead>
+                        <tbody class="text-slate-300"></tbody>
+                    </table>
+                </div>
+                <div id="broker-loading" class="text-center text-slate-500 text-sm py-8">请选择月份后查询</div>
+            </div>
         </div>
     </div>
 </div>
@@ -62,127 +110,128 @@
 
 {% block scripts %}
 <script>
-let allHeatmapData = [];
-let allMonths = [];
+let currentMonth = '';
+let selectedStock = null;
+
+function fmtReturn(v) {
+    if (v == null) return '<span class="text-slate-500">—</span>';
+    const cls = v >= 0 ? 'return-up' : 'return-down';
+    const sign = v >= 0 ? '+' : '';
+    return `<span class="${cls}">${sign}${v.toFixed(2)}%</span>`;
+}
 
 async function init() {
-    try {
-        const [hmResp, monthsResp] = await Promise.all([
-            fetch('/api/broker_recommend/heatmap'),
-            fetch('/api/broker_recommend/months'),
-        ]);
-        allHeatmapData = await hmResp.json();
-        allMonths = await monthsResp.json();
-
-        // 填充月份筛选器
-        const sel = document.getElementById('filter-month');
-        sel.innerHTML = '<option value="">全部月份</option>' +
-            allMonths.map(m => `<option value="${m}">${m}</option>`).join('');
-
-        renderHeatmap(allHeatmapData);
-        loadDetails();
-    } catch (e) {
-        document.getElementById('chart-heatmap').innerHTML =
-            '<div class="flex items-center justify-center h-full text-red-400 text-sm">加载失败: ' + e.message + '</div>';
+    const resp = await fetch('/api/broker_recommend/months');
+    const months = await resp.json();
+    const sel = document.getElementById('select-month');
+    sel.innerHTML = months.map(m => `<option value="${m}">${m.substring(0,4)}-${m.substring(4,6)}</option>`).join('');
+    if (months.length > 0) {
+        sel.value = months[0];
+        loadMonth(months[0]);
     }
 }
 
-function renderHeatmap(data) {
-    const dom = document.getElementById('chart-heatmap');
-    if (dom._echart) dom._echart.dispose();
-    const chart = echarts.init(dom);
-    dom._echart = chart;
+async function loadMonth(month) {
+    currentMonth = month;
+    document.getElementById('top-loading').classList.remove('hidden');
+    document.getElementById('top-loading').textContent = '加载中...';
+    document.getElementById('broker-loading').classList.remove('hidden');
+    document.getElementById('broker-loading').textContent = '加载中...';
+    document.getElementById('stock-detail-content').classList.add('hidden');
+    document.getElementById('stock-detail-placeholder').classList.remove('hidden');
+    selectedStock = null;
 
-    if (!data || data.length === 0) {
-        chart.setOption({
-            title: { text: '暂无金股数据', left: 'center', top: 'center', textStyle: { color: '#64748b', fontSize: 14 } }
-        });
-        return;
-    }
+    const [topResp, rankResp] = await Promise.all([
+        fetch(`/api/broker_recommend/top_stocks?month=${month}&limit=20`),
+        fetch(`/api/broker_recommend/broker_rank?month=${month}&limit=20`),
+    ]);
 
-    const brokers = [...new Set(data.map(d => d.broker))];
-    const months = [...new Set(data.map(d => d.month))].sort();
-    const maxCnt = Math.max(...data.map(d => d.cnt));
+    const topStocks = await topResp.json();
+    const brokerRank = await rankResp.json();
 
-    // 构建矩阵
-    const seriesData = data.map(d => [months.indexOf(d.month), brokers.indexOf(d.broker), d.cnt]);
-
-    chart.setOption({
-        tooltip: {
-            formatter: p => `${brokers[p.data[1]]}<br/>${months[p.data[0]]}<br/>推荐次数: <b>${p.data[2]}</b>`
-        },
-        grid: { left: 120, right: 60, top: 10, bottom: 60 },
-        xAxis: {
-            type: 'category', data: months,
-            axisLabel: { color: '#64748b', fontSize: 9, rotate: 45,
-                formatter: v => v.substring(2, 6) },
-        },
-        yAxis: {
-            type: 'category', data: brokers,
-            axisLabel: { color: '#94a3b8', fontSize: 10 },
-        },
-        visualMap: {
-            min: 0, max: maxCnt,
-            calculable: true,
-            orient: 'vertical', right: 10, top: 'center',
-            inRange: { color: ['#1e293b', '#164e63', '#155e75', '#0e7490', '#06b6d4', '#22d3ee'] },
-            textStyle: { color: '#94a3b8' },
-        },
-        series: [{
-            type: 'heatmap',
-            data: seriesData,
-            label: { show: true, color: '#e2e8f0', fontSize: 9 },
-            emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.5)' } },
-        }]
-    });
-}
-
-async function loadDetails(month, broker) {
-    let url = '/api/broker_recommend?limit=1000';
-    if (month) url += `&month=${month}`;
-    if (broker) url += `&broker=${encodeURIComponent(broker)}`;
-
-    const resp = await fetch(url);
-    const data = await resp.json();
-    document.getElementById('detail-count').textContent = `共 ${data.length} 条`;
-
-    const tbody = document.querySelector('#detail-table tbody');
-    if (data.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" class="px-3 py-6 text-center text-slate-500">暂无数据</td></tr>';
+    // 渲染热门金股表
+    document.getElementById('top-loading').classList.add('hidden');
+    document.getElementById('top-count').textContent = `共 ${topStocks.length} 只`;
+    const tbody = document.querySelector('#top-stocks-table tbody');
+    if (topStocks.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="px-3 py-6 text-center text-slate-500">暂无数据</td></tr>';
     } else {
-        tbody.innerHTML = data.map(r => `
-            <tr class="border-b border-slate-700 hover:bg-slate-700/50">
-                <td class="px-3 py-2 text-xs font-mono text-cyan-400">${r.month}</td>
-                <td class="px-3 py-2 text-xs">${r.broker}</td>
-                <td class="px-3 py-2 text-xs font-mono">${r.ts_code}</td>
-                <td class="px-3 py-2 text-xs">${r.name || '-'}</td>
+        tbody.innerHTML = topStocks.map((s, i) => `
+            <tr class="border-b border-slate-700 clickable-row" onclick="selectStock('${s.ts_code}', '${s.name}', ${i})"
+                data-code="${s.ts_code}">
+                <td class="px-3 py-2 text-xs text-slate-500">${i + 1}</td>
+                <td class="px-3 py-2 text-xs font-mono text-cyan-400">${s.ts_code}</td>
+                <td class="px-3 py-2 text-xs">${s.name || '-'}</td>
+                <td class="px-3 py-2 text-xs text-right">
+                    ${s.rec_cnt >= 5 ? '<span class="tag tag-hot">🔥</span> ' : ''}${s.rec_cnt}
+                </td>
+                <td class="px-3 py-2 text-xs text-right text-slate-400">${s.broker_cnt}</td>
+                <td class="px-3 py-2 text-xs text-right">${fmtReturn(s.month_return)}</td>
             </tr>
         `).join('');
     }
+
+    // 渲染券商排名
+    document.getElementById('broker-loading').classList.add('hidden');
+    const bt = document.querySelector('#broker-rank-table tbody');
+    if (brokerRank.length === 0) {
+        bt.innerHTML = '<tr><td colspan="4" class="px-3 py-6 text-center text-slate-500">暂无数据</td></tr>';
+    } else {
+        bt.innerHTML = brokerRank.map(b => `
+            <tr class="border-b border-slate-700">
+                <td class="px-3 py-2 text-xs">${b.broker}</td>
+                <td class="px-3 py-2 text-xs text-right">${b.rec_cnt}</td>
+                <td class="px-3 py-2 text-xs text-right text-slate-400">${b.stock_cnt}</td>
+                <td class="px-3 py-2 text-xs text-right">${fmtReturn(b.avg_return)}</td>
+            </tr>
+        `).join('');
+    }
+
+    document.getElementById('info-bar').textContent =
+        `${month.substring(0,4)}年${month.substring(4,6)}月 · ${topStocks.length}只金股 · ${brokerRank.length}家券商`;
 }
 
-document.getElementById('btn-filter').addEventListener('click', () => {
-    const month = document.getElementById('filter-month').value;
-    const broker = document.getElementById('filter-broker').value.trim();
-    loadDetails(month || null, broker || null);
+async function selectStock(code, name, rowIndex) {
+    selectedStock = code;
+
+    // 高亮行
+    document.querySelectorAll('#top-stocks-table tbody tr').forEach(r => r.classList.remove('selected-row'));
+    const row = document.querySelectorAll('#top-stocks-table tbody tr')[rowIndex];
+    if (row) row.classList.add('selected-row');
+
+    // 加载表现数据
+    document.getElementById('stock-detail-placeholder').classList.add('hidden');
+    document.getElementById('stock-detail-content').classList.remove('hidden');
+    document.getElementById('sd-title').textContent = `${code} ${name}`;
+    document.getElementById('sd-brokers').textContent = '加载中...';
+    document.getElementById('sd-first').textContent = '—';
+    document.getElementById('sd-last').textContent = '—';
+    document.getElementById('sd-month').textContent = '—';
+    document.getElementById('sd-m3').textContent = '—';
+
+    const resp = await fetch(`/api/broker_recommend/stock_performance?ts_code=${code}&month=${currentMonth}`);
+    const perf = await resp.json();
+
+    if (perf.error) {
+        document.getElementById('sd-brokers').textContent = perf.error;
+        return;
+    }
+
+    document.getElementById('sd-brokers').textContent =
+        '推荐券商: ' + (perf.brokers || []).join(', ');
+    document.getElementById('sd-first').textContent = perf.first_close || '—';
+    document.getElementById('sd-last').textContent = perf.last_close || '—';
+    document.getElementById('sd-month').innerHTML = fmtReturn(perf.month_return);
+    document.getElementById('sd-m3').innerHTML = fmtReturn(perf.m3_return);
+}
+
+document.getElementById('btn-refresh').addEventListener('click', () => {
+    const month = document.getElementById('select-month').value;
+    if (month) loadMonth(month);
 });
 
-document.getElementById('btn-heatmap').addEventListener('click', async () => {
-    const sm = document.getElementById('start-month').value.trim();
-    const em = document.getElementById('end-month').value.trim();
-    let url = '/api/broker_recommend/heatmap';
-    const params = [];
-    if (sm) params.push(`start_month=${sm}`);
-    if (em) params.push(`end_month=${em}`);
-    if (params.length) url += '?' + params.join('&');
-    const resp = await fetch(url);
-    const data = await resp.json();
-    renderHeatmap(data);
-});
-
-window.addEventListener('resize', () => {
-    const dom = document.getElementById('chart-heatmap');
-    if (dom._echart) dom._echart.resize();
+document.getElementById('select-month').addEventListener('change', function() {
+    loadMonth(this.value);
 });
 
 init();

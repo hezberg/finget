@@ -296,3 +296,25 @@ class TestBrokerAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) >= 1
+
+    def test_top_stocks(self, client):
+        resp = client.get("/api/broker_recommend/top_stocks?month=202401")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        assert len(data) >= 1
+        assert data[0]["ts_code"] == "000001.SZ"
+        assert data[0]["rec_cnt"] == 1
+
+    def test_stock_performance(self, client):
+        resp = client.get("/api/broker_recommend/stock_performance?ts_code=000001.SZ&month=202401")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ts_code"] == "000001.SZ"
+
+    def test_broker_rank(self, client):
+        resp = client.get("/api/broker_recommend/broker_rank?month=202401")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        assert len(data) >= 1
