@@ -452,6 +452,9 @@ SCHEMAS: dict[str, str] = {
             pct_chg     DOUBLE,
             vol         DOUBLE,
             amount      DOUBLE,
+            avg_price   DOUBLE,
+            change      DOUBLE,
+            turnover_rate DOUBLE,
             ts_code     VARCHAR,
             name        VARCHAR
         )
