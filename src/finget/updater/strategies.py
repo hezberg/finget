@@ -795,6 +795,8 @@ class UpdateStrategy:
         if not self.store.table_exists(detail_table):
             self.store.init_table(detail_table, detail_table)
 
+        from finget.fetchers.tushare_fetcher import TushareFetcher  # noqa: F811
+
         # 1. 计算日期范围
         if end_date is not None:
             overall_end = _to_date(end_date)
@@ -833,8 +835,19 @@ class UpdateStrategy:
                 )
                 total_rows += rows
             except Exception as e:
-                log.error(f"{dataset.name} {ts_code}: {e}")
-                continue
+                if TushareFetcher.is_rate_limit_error(e):
+                    self.fetcher.wait_for_cooldown()
+                    # 冷却后重试当前标的
+                    try:
+                        rows = self._fetch_survey_one(
+                            dataset, ts_code, overall_start, overall_end
+                        )
+                        total_rows += rows
+                        continue
+                    except Exception as e2:
+                        log.error(f"{dataset.name} {ts_code}: retry failed: {e2}")
+                else:
+                    log.error(f"{dataset.name} {ts_code}: {e}")
 
         log.info(f"{dataset.name}: total {total_rows} rows updated.")
         return total_rows
@@ -1044,6 +1057,8 @@ class UpdateStrategy:
         if ts_codes is None:
             ts_codes = self._get_all_ts_codes()
 
+        from finget.fetchers.tushare_fetcher import TushareFetcher  # noqa: F811
+
         total_rows = 0
 
         for ts_code in iter_with_progress(
@@ -1057,8 +1072,18 @@ class UpdateStrategy:
                 )
                 total_rows += rows
             except Exception as e:
-                log.error(f"{dataset.name} {ts_code}: {e}")
-                continue
+                if TushareFetcher.is_rate_limit_error(e):
+                    self.fetcher.wait_for_cooldown()
+                    try:
+                        rows = self._fetch_one(
+                            dataset, ts_code, start_date, end_date
+                        )
+                        total_rows += rows
+                        continue
+                    except Exception as e2:
+                        log.error(f"{dataset.name} {ts_code}: retry failed: {e2}")
+                else:
+                    log.error(f"{dataset.name} {ts_code}: {e}")
 
         log.info(f"{dataset.name}: total {total_rows} rows updated.")
         return total_rows

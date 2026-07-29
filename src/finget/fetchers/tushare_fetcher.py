@@ -345,3 +345,47 @@ class TushareFetcher(BaseFetcher):
                 results[td] = df
 
         return results
+
+    # ------------------------------------------------------------------
+    # 限速容错
+    # ------------------------------------------------------------------
+
+    COOLDOWN_SECONDS = 360  # 6 分钟冷却
+
+    @staticmethod
+    def is_rate_limit_error(error: str | Exception) -> bool:
+        """判断是否为 tushare 超速/冷却错误."""
+        msg = str(error)
+        return any(kw in msg for kw in ("访问频率已超速", "冷却", "超速"))
+
+    def wait_for_cooldown(self, retry_interval: int = 60) -> bool:
+        """等待 tushare 冷却结束.
+
+        每分钟检查一次是否恢复（通过尝试轻量 API 调用）。
+        返回 True 表示恢复，False 表示超时或无法恢复.
+        """
+        import time as time_mod
+
+        log.warning(
+            f"Rate limit hit — waiting {self.COOLDOWN_SECONDS}s cooldown, "
+            f"retrying every {retry_interval}s..."
+        )
+        deadline = time_mod.monotonic() + self.COOLDOWN_SECONDS + 60
+        while time_mod.monotonic() < deadline:
+            time_mod.sleep(retry_interval)
+            try:
+                self._throttle()
+                import tushare as ts
+
+                result = self._api.query("stock_basic", exchange="", list_status="L", limit=1)
+                if result is not None and not (hasattr(result, "empty") and result.empty):
+                    log.info("Cooldown ended — resuming")
+                    return True
+            except Exception as e:
+                if not self.is_rate_limit_error(e):
+                    log.warning(f"Probe failed with non-rate-limit error: {e}")
+                else:
+                    log.debug(f"Still in cooldown: {e}")
+
+        log.warning("Cooldown wait timeout — resuming anyway")
+        return False
