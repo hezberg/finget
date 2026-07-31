@@ -202,9 +202,11 @@ class TushareFetcher(BaseFetcher):
         call_params["limit"] = limit
 
         log.debug(f"tushare {api_name} call: {call_params}")
+        # 支持调用方通过 params 传入 fields 参数（如显式请求 content 等非默认字段）
+        fields_val = call_params.pop("fields", "")
         df: pd.DataFrame = self._api.query(
             api_name=api_name,
-            fields="",
+            fields=fields_val,
             **call_params,
         )
         row_count = len(df) if df is not None else 0

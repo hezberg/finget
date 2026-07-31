@@ -109,6 +109,7 @@ class StrategyConfig(BaseModel):
     控制 `finget fetch latest` 和 `finget scan` 命令的行为：
     - latest_datasets: 每日增量更新时处理哪些数据集（按 UpdateMode.DAILY 或 INCREMENTAL）
     - scan_datasets: 查漏补缺时扫描哪些数据集
+
     """
 
     latest_datasets: list[str] = Field(default_factory=lambda: [
@@ -147,8 +148,10 @@ DEFAULT_DATASETS: list[DatasetConfig] = [
     DatasetConfig(name="broker_recommend", type="broker_recommend",
                   api_name="broker_recommend", params={}),
     # 机构调研记录（上市公司机构调研）
-    # 单次最大 100 条，逐标的拉取；content 大文本拆 stk_surv_detail 表
-    DatasetConfig(name="stk_surv", type="stk_surv", api_name="stk_surv", params={}),
+    # 单次最大 100 条，支持按日期全市场拉取（不传 ts_code）；
+    # content 大文本拆 stk_surv_detail 表
+    DatasetConfig(name="stk_surv", type="stk_surv", api_name="stk_surv", params={},
+                  daily_supported=True),
     # 港美股基础信息（港股 hk_basic + 美股 us_basic 合并写入）
     DatasetConfig(name="hk_us_basic", type="hk_us_basic", api_name="hk_us_basic", params={}),
     # 同花顺概念/行业成分股（合并 ths_index + ths_sector + ths_member 三个 API）

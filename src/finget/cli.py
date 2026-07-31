@@ -84,9 +84,9 @@ DATASET_DESCRIPTIONS = {
     "report_rc": "卖方研报盈利预测（按季度并发拉取）",
     "stk_factor_pro": "技术面因子 MACD/KDJ/RSI/BOLL 等（支持按日全市场拉取）",
     "broker_recommend": "券商月度金股（按月并发拉取）",
-    "stk_surv": "机构调研记录（逐标的拉取，content 拆详情表）",
+    "stk_surv": "机构调研记录（按日全市场拉取，极速）",
     "hk_us_basic": "港美股基础信息（港股+美股合并，一次性全量）",
-    "ths_index": "同花顺概念/行业成分股（合并多API，一次性全量）",
+    "ths_index": "同花顺概念/行业成分股（合并多API，一次性全量）", 
 }
 
 
@@ -94,14 +94,38 @@ DATASET_DESCRIPTIONS = {
 def main() -> None:
     """finget — 金融数据获取工具.
 
+    \b
     快速上手:
-      finget init                # 一站式初始化（建表 + 基础数据）
-      finget fetch daily         # 拉取日线行情（默认往前1年）
-      finget fetch latest        # 每日增量更新（按策略配置）
-      finget stats               # 查看数据覆盖情况
+      finget init                   # 🏗️ 一站式初始化（建表+基础数据）
+      finget fetch daily            # 📥 拉取日线行情
+      finget fetch latest           # 🔄 每日增量更新
+      finget stats                  # 📊 查看数据覆盖情况
+      finget show daily -n 5        # 👀 快速预览
+      finget scan                   # 🔍 查漏补缺
+      finget serve                  # 🌐 启动 Web 仪表盘
 
-    可用数据集: daily, weekly, adj_factor, daily_basic, trade_cal,
-                report_rc, stk_factor_pro, broker_recommend, stk_surv, hk_us_basic, stock_basic
+    \b
+    首次使用:
+      1. cp .env.example .env       # 创建环境变量文件
+      2. 编辑 .env 填入 TUSHARE_TOKEN
+      3. finget init                # 建表+股票基础信息+交易日历
+      4. finget fetch daily -S 20240101  # 拉取日线历史数据
+
+    \b
+    常用命令:
+      fetch <dataset>               # 拉取数据集
+      fetch <dataset> -S 20200101   # 从指定日期开始
+      fetch latest                  # 按策略配置增量更新
+      scan                          # 查漏补缺
+      stats                         # 数据统计
+      show <table> <options>        # 查看/导出表内容
+      serve [options]               # 启动 Web 前端
+
+    \b
+    可用数据集:
+      stock_basic, daily, weekly, adj_factor, daily_basic,
+      trade_cal, report_rc, stk_factor_pro, broker_recommend,
+      stk_surv, hk_us_basic, ths_index
     """
 
 
@@ -382,29 +406,33 @@ def fetch(
 ) -> None:
     """拉取或更新数据集.
 
-    DATASET_NAME 是要拉取的数据集名称，可用:
-      stock_basic  股票基础信息（一次性全量）
-      daily        日线行情 ★
-      weekly       周线行情
-      adj_factor   复权因子 ★
-      daily_basic  每日指标 ★
-      trade_cal    交易日历
-      report_rc    卖方研报盈利预测
-      stk_factor_pro 技术面因子 ★
-      broker_recommend 券商月度金股
-      latest       特殊值：按策略配置文件做每日增量更新
+    \b
+    DATASET_NAME 分类:
+      ⚡ 按日全市场（极速）  daily, adj_factor, daily_basic, stk_factor_pro
+      📋 一次性全量         stock_basic, trade_cal, hk_us_basic, ths_index
+      🐢 逐标的/区间        weekly, report_rc, broker_recommend, stk_surv
+      🔄 特殊值              latest（按策略配置增量更新）
 
-    ★ 标记的数据集支持按日全市场拉取（速度极快）
+    \b
+    日期参数:
+      -S, --start-date   起始日期 YYYYMMDD（不传则自动增量）
+      -E, --end-date     结束日期 YYYYMMDD（不传则到今天）
+      -s, --codes        指定标的代码，逗号分隔
 
-    不传 --start-date 时自动增量：表有数据从 max_date+1 开始，空表回溯几天。
-    首次拉取历史数据请用 -S 指定起点（如 -S 20200101）。
+    \b
+    自动增量（不传 -S 时）:
+      · 表有数据 → 从 max_date+1 开始
+      · 空表 → 回溯几天兜底
+      · 首次拉历史数据请务必用 -S 指定起点
 
-    常用示例:
-      finget fetch daily                     # 自动增量（从上次 max_date+1 到今天）
-      finget fetch daily -S 20240101         # 从指定日期拉取日线
-      finget fetch report_rc -S 20210101     # 全量拉取研报
-      finget fetch broker_recommend -S 20160101  # 全量拉取金股
-      finget fetch latest                    # 按策略配置每日增量更新
+    \b
+    示例:
+      finget fetch daily
+      finget fetch daily -S 20240101
+      finget fetch report_rc -S 20210101
+      finget fetch broker_recommend -S 20160101
+      finget fetch stk_surv -S 20250625
+      finget fetch latest
     """
     cfg = _get_cfg_or_exit()
 
@@ -413,7 +441,7 @@ def fetch(
     from finget.updater.strategies import UpdateStrategy
 
     if cfg.fetcher.tushare is None:
-        console.print("[red]No tushare config found.[/red]")
+        console.print("[red]未找到 tushare 配置，请检查 .env 文件[/red]")
         sys.exit(1)
 
     start_date = _parse_date(start_date, "start_date")
@@ -432,11 +460,7 @@ def fetch(
         console.print("[dim]或使用 [bold]finget fetch latest[/bold] 按策略配置更新[/dim]")
         sys.exit(1)
 
-    # 默认日期：不传 start_date 时透传 None 给底层。
-    # 底层会智能决定：表有数据从 max_date+1 开始（增量）；空表回溯几天兜底。
-    # 首次全量初始化历史数据请显式传 -S。
-
-    # fetch 执行期间抑制 finget 的 INFO 日志（仅保留 WARNING+），让输出干净
+    # fetch 期间抑制 INFO 日志，让输出干净
     from finget.logging import log as finget_log
     is_quiet = cfg.log_level.upper() == "INFO"
     if is_quiet:

@@ -9,7 +9,11 @@ import pandas as pd
 from rich.console import Console
 from rich.table import Table
 
-from finget.storage.duckdb_store import TIME_SERIES_DATASETS, DuckDBStore
+from finget.storage.duckdb_store import (
+    TIME_SERIES_DATASETS,
+    SURVEY_DATASETS,
+    DuckDBStore,
+)
 
 # 研报类数据集（有 ts_code + report_date，需统计日期范围但日期列名不同）
 RESEARCH_DATASETS = {"report_rc"}
@@ -18,6 +22,9 @@ RESEARCH_DATE_COL = {"report_rc": "report_date"}
 
 # 券商月度金股类数据集（有 ts_code + month，需统计月份范围）
 BROKER_DATASETS = {"broker_recommend"}
+
+# 调研类数据集日期列名映射
+SURVEY_DATE_COL = "surv_date"
 
 
 @dataclass
@@ -158,6 +165,39 @@ class StatsCollector:
                 min_date=min_date,
                 max_date=max_date,
                 actual_dates=int(row["num_months"]),
+            )
+        elif table in SURVEY_DATASETS:
+            # 机构调研：用 surv_date 做日期列，stk_surv_detail 是附属表
+            if table == "stk_surv_detail":
+                num = self.store.query(f"SELECT count(*) as c FROM {table}").iloc[0]["c"]
+                return TableStats(
+                    table_name=table,
+                    total_rows=total,
+                    num_codes=0,
+                    min_date=None,
+                    max_date=None,
+                )
+            date_col = SURVEY_DATE_COL
+            df = self.store.query(
+                f"""
+                SELECT
+                    count(DISTINCT ts_code) as num_codes,
+                    min({date_col}) as min_d,
+                    max({date_col}) as max_d,
+                    count(DISTINCT {date_col}) as num_dates
+                FROM {table}
+                """
+            )
+            if df.empty:
+                return TableStats(table, 0, 0, None, None)
+            row = df.iloc[0]
+            return TableStats(
+                table_name=table,
+                total_rows=total,
+                num_codes=int(row["num_codes"]),
+                min_date=row["min_d"],
+                max_date=row["max_d"],
+                actual_dates=int(row["num_dates"]),
             )
         else:
             num = self.store.query(f"SELECT count(*) as c FROM {table}").iloc[0]["c"]

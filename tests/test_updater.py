@@ -899,7 +899,7 @@ class TestBehaviorConsistency:
 
 
 class FakeSurveyFetcher(BaseFetcher):
-    """stk_surv 测试用 fetcher，按 ts_code 返回含 content 的调研数据."""
+    """stk_surv 测试用 fetcher，按日期范围返回含 content 的调研数据."""
 
     def __init__(self, survey_df: pd.DataFrame) -> None:
         super().__init__(rate_limit_per_min=0)
@@ -917,10 +917,11 @@ class FakeSurveyFetcher(BaseFetcher):
         if api_name != "stk_surv":
             return pd.DataFrame()
         df = self.survey_df.copy()
-        p = dict(params or {})
-        ts_code = p.get("ts_code")
-        if ts_code and "ts_code" in df.columns:
-            df = df[df["ts_code"] == ts_code]
+        # 按日期范围过滤（新方案：按日全市场，不传 ts_code）
+        sd = (params or {}).get("start_date")
+        ed = (params or {}).get("end_date")
+        if sd and ed and "surv_date" in df.columns:
+            df = df[(df["surv_date"] >= sd) & (df["surv_date"] <= ed)]
         return df
 
 
@@ -963,8 +964,8 @@ class TestUpdateSurvey:
         fetcher = FakeSurveyFetcher(survey_df)
         strategy = UpdateStrategy(fetcher, store, cfg)
 
-        n = strategy.run(cfg.datasets[0], ts_codes=["002223.SZ"],
-                         start_date="20210101", end_date="20211231")
+        n = strategy.run(cfg.datasets[0],
+                         start_date="20211024", end_date="20211025")
         assert n == 2
         # 主表 2 行，不含 content 列
         assert store.count_rows("stk_surv") == 2
@@ -987,8 +988,8 @@ class TestUpdateSurvey:
         fetcher = FakeSurveyFetcher(df)
         strategy = UpdateStrategy(fetcher, store, cfg)
 
-        strategy.run(cfg.datasets[0], ts_codes=["002223.SZ"],
-                     start_date="20210101", end_date="20211231")
+        strategy.run(cfg.datasets[0],
+                     start_date="20211024", end_date="20211025")
         # 主表 2 行
         assert store.count_rows("stk_surv") == 2
         # 详情表只 1 行（content 非空的那条）
@@ -1005,13 +1006,13 @@ class TestUpdateSurvey:
         fetcher = FakeSurveyFetcher(survey_df)
         strategy = UpdateStrategy(fetcher, store, cfg)
 
-        strategy.run(cfg.datasets[0], ts_codes=["002223.SZ"],
-                     start_date="20210101", end_date="20211231")
+        strategy.run(cfg.datasets[0],
+                     start_date="20211024", end_date="20211025")
         count_main = store.count_rows("stk_surv")
         count_detail = store.count_rows("stk_surv_detail")
         # 再拉一次
-        strategy.run(cfg.datasets[0], ts_codes=["002223.SZ"],
-                     start_date="20210101", end_date="20211231")
+        strategy.run(cfg.datasets[0],
+                     start_date="20211024", end_date="20211025")
         assert store.count_rows("stk_surv") == count_main
         assert store.count_rows("stk_surv_detail") == count_detail
         store.close()
@@ -1020,8 +1021,8 @@ class TestUpdateSurvey:
         """stk_surv 应在 SURVEY_DATASETS 集合中."""
         assert "stk_surv" in SURVEY_DATASETS
 
-    def test_survey_fetches_by_ts_code(self, fake_stock_basic_df):
-        """应逐标的拉取，fetch_all 调用次数 == ts_codes 数量."""
+    def test_survey_fetches_by_month(self, fake_stock_basic_df):
+        """应按月全市场拉取，fetch_all 调用次数 == 月份数."""
         cfg = self._make_config()
         store = DuckDBStore(cfg.storage)
         store.init_all()
@@ -1030,10 +1031,15 @@ class TestUpdateSurvey:
         fetcher = FakeSurveyFetcher(survey_df)
         strategy = UpdateStrategy(fetcher, store, cfg)
 
-        strategy.run(cfg.datasets[0], ts_codes=["002223.SZ", "600000.SH"],
-                     start_date="20210101", end_date="20211231")
-        # 每个 ts_code 调一次 fetch_all
-        assert len(fetcher.calls) == 2
+        strategy.run(cfg.datasets[0],
+                     start_date="20211024", end_date="20211025")
+        # 跨 1 个月（10月），1 次 fetch_all 调用
+        assert len(fetcher.calls) == 1
+        call_params = fetcher.calls[0]
+        assert "start_date" in call_params
+        assert "end_date" in call_params
+        # 确保不传 ts_code（全市场拉取）
+        assert "ts_code" not in call_params
         store.close()
 
 

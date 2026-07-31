@@ -772,12 +772,14 @@ class UpdateStrategy:
         start_date: str | date | None = None,
         end_date: str | date | None = None,
     ) -> int:
-        """更新机构调研数据集（如 stk_surv）.
+        """更新机构调研数据集（如 stk_surv）— 按月全市场拉取（极速版）.
 
-        逐标的拉取（单次最大 100 条，按 ts_code 分页）。
-        拉到的数据拆分写入两张表：
-        - stk_surv（主表，9 列元数据，不含 content 大文本）
-        - stk_surv_detail（详情表，content 大文本隔离，按需 JOIN）
+        改为按月全市场拉取（不传 ts_code，用 start_date/end_date 按月分批）。
+        每月 1 次 API 调用（一个月数据 < 5000 行，无需分页），
+        相比原逐标的遍历方案（~5400 次调用），从 2025-06 到 2026-07 只需 14 次调用。
+
+        content 大文本拆分写入 stk_surv_detail 表（隔离存储，按需 JOIN）。
+        注意：当前镜像站不返回 content 字段，detail 表会保持为空。
 
         日期范围逻辑：
         - start_date 显式指定 → 用之
@@ -786,7 +788,7 @@ class UpdateStrategy:
         - end_date 显式指定 → 用之；None → 今天
 
         Args:
-            ts_codes: 指定标的列表; None 则自动获取全部.
+            ts_codes: 保留参数（不再使用，按月全市场不传 ts_code）.
             start_date: 起始日期.
             end_date: 结束日期.
         """
@@ -806,95 +808,100 @@ class UpdateStrategy:
         if start_date is not None:
             overall_start = _to_date(start_date)
         else:
-            # 未指定起始日期：查 max(surv_date) 回溯（增量），表空则回溯 N 年（全量）
             max_d = self.store.get_max_date_col(dataset.name, "surv_date")
             if max_d is not None:
                 overall_start = max_d - timedelta(days=self.update_cfg.incremental_lookback_days)
             else:
                 overall_start = date.today() - timedelta(days=365 * self.update_cfg.full_lookback_years)
 
-        # 2. 获取标的列表
-        if ts_codes is None:
-            ts_codes = self._get_all_ts_codes()
-
-        log.info(
-            f"{dataset.name}: 逐标的拉取 {len(ts_codes)} 只标的, "
-            f"{overall_start.isoformat()} ~ {overall_end.isoformat()}"
-        )
-
-        # 3. 逐标的拉取 + 拆分写入
-        total_rows = 0
-        for ts_code in iter_with_progress(
-            ts_codes,
-            description=f"[{dataset.name}] 逐标的拉取",
-            total=len(ts_codes),
-        ):
-            try:
-                rows = self._fetch_survey_one(
-                    dataset, ts_code, overall_start, overall_end
-                )
-                total_rows += rows
-            except Exception as e:
-                if TushareFetcher.is_rate_limit_error(e):
-                    self.fetcher.wait_for_cooldown()
-                    # 冷却后重试当前标的
-                    try:
-                        rows = self._fetch_survey_one(
-                            dataset, ts_code, overall_start, overall_end
-                        )
-                        total_rows += rows
-                        continue
-                    except Exception as e2:
-                        log.error(f"{dataset.name} {ts_code}: retry failed: {e2}")
-                else:
-                    log.error(f"{dataset.name} {ts_code}: {e}")
-
-        log.info(f"{dataset.name}: total {total_rows} rows updated.")
-        return total_rows
-
-    def _fetch_survey_one(
-        self,
-        dataset: DatasetConfig,
-        ts_code: str,
-        start: date,
-        end: date,
-    ) -> int:
-        """拉取单个标的的机构调研数据，拆分写入主表和详情表."""
-        df = self.fetcher.fetch_all(
-            api_name=dataset.api_name,
-            params={
-                **dataset.params,
-                "ts_code": ts_code,
-                "start_date": _to_yyyymmdd_str(start),
-                "end_date": _to_yyyymmdd_str(end),
-            },
-            page_size=100,  # stk_surv 单次最大 100 条
-        )
-        if df.empty:
+        if overall_start > overall_end:
+            log.info(f"{dataset.name}: start > end, skip.")
             return 0
 
-        # 日期转换
-        if "surv_date" in df.columns:
-            df["surv_date"] = pd.to_datetime(
-                df["surv_date"], format="%Y%m%d", errors="coerce"
-            ).dt.date
+        log.info(f"{dataset.name}: 按月全市场拉取 {overall_start} ~ {overall_end}")
 
-        # 拆分：主表（不含 content）+ 详情表（content）
-        detail_table = f"{dataset.name}_detail"
+        # 2. 按月切分（每月 1 次调用，整月不分页）
+        months = self._generate_months(overall_start, overall_end)
+
+        log.info(f"{dataset.name}: {len(months)} months to fetch.")
+
+        # 3. 按月拉取 + 拆分写入
+        total_rows = 0
         conflict_keys = ["ts_code", "surv_date", "rece_org"]
 
-        # 主表：drop content 列（如果存在）
-        main_df = df.drop(columns=["content"], errors="ignore")
-        n = self.store.upsert(dataset.name, main_df, conflict_keys=conflict_keys)
+        with create_progress() as progress:
+            task = progress.add_task(
+                f"[{dataset.name}] 按月全市场拉取 {overall_start}~{overall_end}",
+                total=len(months),
+            )
+            for month in months:
+                y, m = int(month[:4]), int(month[4:])
+                month_start = date(y, m, 1)
+                if m == 12:
+                    month_end = date(y, 12, 31)
+                else:
+                    month_end = date(y, m + 1, 1) - timedelta(days=1)
 
-        # 详情表：只写 content 非空的行
-        if "content" in df.columns:
-            detail_df = df[["ts_code", "surv_date", "rece_org", "content"]].copy()
-            detail_df = detail_df[detail_df["content"].notna() & (detail_df["content"] != "")]
-            if not detail_df.empty:
-                self.store.upsert(detail_table, detail_df, conflict_keys=conflict_keys)
+                fetch_params = {
+                    **dataset.params,
+                    "start_date": _to_yyyymmdd_str(month_start),
+                    "end_date": _to_yyyymmdd_str(month_end),
+                }
 
-        return n
+                try:
+                    df = self.fetcher.fetch_all(
+                        api_name=dataset.api_name,
+                        params=fetch_params,
+                        # 默认 page_size=5000，一个月数据远小于此数，无需手动分页
+                    )
+                except Exception as e:
+                    if TushareFetcher.is_rate_limit_error(e):
+                        self.fetcher.wait_for_cooldown()
+                        try:
+                            df = self.fetcher.fetch_all(
+                                api_name=dataset.api_name,
+                                params=fetch_params,
+                            )
+                        except Exception as e2:
+                            log.error(f"{dataset.name} {month}: retry failed: {e2}")
+                            progress.advance(task)
+                            continue
+                    else:
+                        log.error(f"{dataset.name} {month}: {e}")
+                        progress.advance(task)
+                        continue
+
+                if df.empty:
+                    progress.advance(task)
+                    continue
+
+                # 日期转换
+                if "surv_date" in df.columns:
+                    df["surv_date"] = pd.to_datetime(
+                        df["surv_date"], format="%Y%m%d", errors="coerce"
+                    ).dt.date
+
+                # 拆分：主表（不含 content）+ 详情表（content）
+                main_df = df.drop(columns=["content"], errors="ignore")
+                try:
+                    n = self.store.upsert(dataset.name, main_df, conflict_keys=conflict_keys)
+                    total_rows += n
+                except Exception as e:
+                    log.error(f"{dataset.name} {month} main upsert: {e}")
+
+                if "content" in df.columns:
+                    detail_df = df[["ts_code", "surv_date", "rece_org", "content"]].copy()
+                    detail_df = detail_df[detail_df["content"].notna() & (detail_df["content"] != "")]
+                    if not detail_df.empty:
+                        try:
+                            self.store.upsert(detail_table, detail_df, conflict_keys=conflict_keys)
+                        except Exception as e:
+                            log.error(f"{dataset.name} {month} detail upsert: {e}")
+
+                progress.advance(task)
+
+        log.info(f"{dataset.name}: total {total_rows} rows over {len(months)} month(s).")
+        return total_rows
 
     # ------------------------------------------------------------------
     # 时序数据（按 trade_date 单日全市场）
